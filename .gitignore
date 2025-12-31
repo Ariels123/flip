@@ -1,0 +1,61 @@
+# Binaries (executables only, not directories)
+*.exe
+/flip2d
+/flip2d-*
+/flip2_test
+!flip2d-win.exe
+!flip2-win.exe
+
+# But allow flip2/ directory
+!flip2/
+
+# Data directories
+pb_data/
+pb_data_test/
+archives/
+
+# Logs
+*.log
+logs/
+*.pid
+
+# Credentials
+credentials/
+*.pem
+*.key
+*.crt
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.pyc
+.Python
+venv/
+ENV/
+
+# Go
+vendor/
+*.test
+
+# Temporary
+/tmp/
+*.tmp
+*.bak
+*.backup
+
+# Node
+node_modules/
+
+# Keep important files
+!scripts/*.sh
+!scripts/*.py
+!config/*.yaml

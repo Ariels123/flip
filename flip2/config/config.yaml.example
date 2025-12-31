@@ -1,0 +1,97 @@
+# FLIP2 Configuration
+# Copy to config.yaml and modify as needed
+
+flip2:
+  # Daemon settings
+  daemon:
+    pid_file: /var/run/flip2/flip2d.pid
+    log_file: /var/log/flip2/flip2d.log
+    log_level: info  # debug, info, warn, error
+    log_capture_dir: /var/log/flip2/captured # Directory to store captured console logs
+    max_log_file_size_mb: 10 # Max size of a captured log file before rotation (in MB)
+    max_log_files: 5 # Max number of captured log files to keep
+
+  # PocketBase settings
+  pocketbase:
+    host: 0.0.0.0
+    port: 8090
+    data_dir: ./pb_data
+
+    # For MySQL (production):
+    # database: mysql://flip2:password@localhost:3306/flip2?parseTime=true
+
+    # For PostgreSQL:
+    # database: postgres://flip2:password@localhost:5432/flip2?sslmode=disable
+
+  # Agent backends
+  backends:
+    claude:
+      command: claude
+      args:
+        - "-p"
+        - "--dangerously-skip-permissions"
+        - "--output-format"
+        - "text"
+      timeout: 300s
+      max_tokens: 8192
+
+    gemini:
+      command: gemini
+      args:
+        - "-m"
+        - "gemini-2.5-flash"
+        - "-p"
+      timeout: 180s
+      max_tokens: 8192
+
+    antigravity:
+      type: http
+      url: http://localhost:9222
+      timeout: 300s
+
+  # Scheduler settings
+  scheduler:
+    timezone: UTC
+    max_concurrent_jobs: 4
+    jobs:
+      health-check:
+        cron: "*/1 * * * *"  # Every minute
+        enabled: true
+      task-executor:
+        cron: "*/30 * * * * *"  # Every 30 seconds
+        enabled: true
+      agent-heartbeat:
+        cron: "*/2 * * * *"  # Every 2 minutes
+        enabled: true
+      task-cleanup:
+        cron: "0 * * * *"  # Every hour
+        enabled: true
+
+  # Task executor settings
+  executor:
+    max_concurrent_tasks: 3
+    default_timeout: 300s
+    retry_attempts: 2
+    retry_delay: 30s
+
+    # Worker prompt prefix
+    worker_prefix: |
+      You are a WORKER agent in the FLIP2 multi-agent system.
+
+      IMPORTANT RULES:
+      - Complete your assigned task and report results clearly
+      - Do NOT spawn additional agents without explicit approval
+      - Do NOT make autonomous decisions beyond your task scope
+      - Keep responses focused and concise
+
+  # Metrics and monitoring
+  metrics:
+    enabled: true
+    retention_days: 30
+
+  # Security
+  security:
+    # Admin credentials (set on first run)
+    admin_email: admin@localhost
+    # API keys for external access
+    api_keys_enabled: false

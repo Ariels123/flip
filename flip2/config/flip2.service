@@ -1,0 +1,12 @@
+[Unit]
+Description=FLIP2 Multi-Agent Coordination Daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/flip2d --config /etc/flip2/config.yaml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

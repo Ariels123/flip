@@ -1,0 +1,36 @@
+flip2:
+  daemon:
+    pid_file: /tmp/flip2d-test.pid
+    log_file: /tmp/flip2d-test.log
+    log_level: debug
+
+  pocketbase:
+    host: 0.0.0.0
+    port: 9190  # TEST PORT
+    data_dir: ./pb_data_test
+    tls:
+      enabled: false
+
+  security:
+    api_keys_enabled: true
+    api_key: flip2_test_key_123
+    jwt_secret: flip2_test_jwt_456
+    bootstrap_api_key: flip2_test_bootstrap_789
+
+  sync:
+    enabled: false  # Don't sync test to production!
+
+  archiver:
+    enabled: false  # No archiving in test
+
+  executor:
+    max_concurrent_tasks: 1
+    default_timeout: 60s
+
+  metrics:
+    enabled: true
+
+  supervisor:
+    enabled: true
+    max_failures: 3
+    recovery_delay: 10s
