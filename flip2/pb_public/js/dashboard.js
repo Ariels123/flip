@@ -8,6 +8,7 @@ document.addEventListener('alpine:init', () => {
     agents: [],
     signals: [],
     costs: [],
+    alerts: [],
     stats: {
       agentsOnline: 0,
       signalsPerMin: 0,
@@ -87,7 +88,8 @@ document.addEventListener('alpine:init', () => {
           this.loadAgents(),
           this.loadRecentSignals(),
           this.loadCosts(),
-          this.loadHealthMetrics()
+          this.loadHealthMetrics(),
+          this.loadAlerts()
         ]);
 
         // Update stats after all data is loaded
@@ -191,6 +193,21 @@ document.addEventListener('alpine:init', () => {
         this.lastUpdateTimestamp = new Date();
       }, (err) => {
         console.error('[Costs] Subscription error:', err);
+      });
+
+      // Subscribe to alerts collection
+      this.pb.collection('alerts').subscribe('*', (e) => {
+        console.log('[Alerts] Real-time event:', e.action, e.record);
+
+        if (e.action === 'create' && e.record.state === 'firing') {
+          this.alerts.unshift(e.record);
+          console.log('[Alerts] New alert fired:', e.record.alert_name);
+        } else if (e.action === 'update' && e.record.state === 'resolved') {
+          this.alerts = this.alerts.filter(a => a.id !== e.record.id);
+          console.log('[Alerts] Alert resolved:', e.record.alert_name);
+        }
+      }, (err) => {
+        console.error('[Alerts] Subscription error:', err);
       });
 
       console.log('[Dashboard] Real-time subscriptions active');
@@ -564,6 +581,37 @@ document.addEventListener('alpine:init', () => {
       console.log('[Dashboard] Updating charts...');
       this.updateSignalChart();
       this.updateCostChart();
+    },
+
+    // Load active alerts
+    async loadAlerts() {
+      console.log('[Dashboard] Loading active alerts...');
+      try {
+        const records = await this.pb.collection('alerts').getFullList({
+          filter: 'state = "firing"',
+          sort: '-fired_at',
+          $autoCancel: false
+        });
+        this.alerts = records;
+        console.log(`[Alerts] Loaded ${records.length} active alerts`);
+      } catch (error) {
+        console.error('[Alerts] Error loading:', error);
+        this.alerts = [];
+      }
+    },
+
+    // Acknowledge (resolve) an alert
+    async acknowledgeAlert(alertId) {
+      try {
+        await this.pb.collection('alerts').update(alertId, {
+          state: 'resolved',
+          resolved_at: new Date().toISOString()
+        });
+        // Real-time subscription will remove it from the list
+        console.log('[Alerts] Alert acknowledged:', alertId);
+      } catch (error) {
+        console.error('[Alerts] Error acknowledging alert:', error);
+      }
     },
 
     // Load System Health Metrics (Phase 4)

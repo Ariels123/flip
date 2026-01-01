@@ -213,6 +213,68 @@
           </div>
         </div>
       </div>
+
+      <!-- Active Alerts Panel -->
+      <div class="bg-slate-800 rounded-lg p-6 border border-slate-700">
+        <h2 class="text-lg font-semibold mb-4">Active Alerts</h2>
+        <div x-show="alerts.length === 0" class="text-sm text-slate-500 text-center py-4">
+          No active alerts
+        </div>
+        <div class="space-y-2">
+          <template x-for="alert in alerts" :key="alert.id">
+            <div class="bg-slate-900 rounded-lg p-4 border-l-4"
+                 :class="{
+                   'border-red-500': alert.severity === 'critical',
+                   'border-amber-500': alert.severity === 'warning',
+                   'border-blue-500': alert.severity === 'info'
+                 }">
+              <div class="flex items-start justify-between">
+                <div class="flex-1">
+                  <div class="flex items-center gap-2 mb-1">
+                    <span class="text-lg"
+                          :class="{
+                            'text-red-400': alert.severity === 'critical',
+                            'text-amber-400': alert.severity === 'warning',
+                            'text-blue-400': alert.severity === 'info'
+                          }">
+                      <span x-show="alert.severity === 'critical'">🚨</span>
+                      <span x-show="alert.severity === 'warning'">⚠️</span>
+                      <span x-show="alert.severity === 'info'">ℹ️</span>
+                    </span>
+                    <span class="font-semibold text-slate-200" x-text="alert.alert_name"></span>
+                    <span class="text-xs px-2 py-1 rounded"
+                          :class="{
+                            'bg-red-900 text-red-200': alert.severity === 'critical',
+                            'bg-amber-900 text-amber-200': alert.severity === 'warning',
+                            'bg-blue-900 text-blue-200': alert.severity === 'info'
+                          }"
+                          x-text="alert.severity.toUpperCase()"></span>
+                  </div>
+                  <div class="text-sm text-slate-300 mb-2" x-text="alert.message"></div>
+                  <div class="grid grid-cols-2 gap-2 text-xs text-slate-400">
+                    <div>
+                      <span class="font-medium">Value:</span>
+                      <span x-text="alert.metric_value.toFixed(2)"></span>
+                    </div>
+                    <div>
+                      <span class="font-medium">Threshold:</span>
+                      <span x-text="alert.threshold"></span>
+                    </div>
+                    <div class="col-span-2">
+                      <span class="font-medium">Fired:</span>
+                      <span x-text="new Date(alert.fired_at).toLocaleString()"></span>
+                    </div>
+                  </div>
+                </div>
+                <button @click="acknowledgeAlert(alert.id)"
+                        class="ml-4 px-3 py-1 text-xs bg-slate-700 hover:bg-slate-600 rounded transition-colors">
+                  Acknowledge
+                </button>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
     </div>
   </main>
 
