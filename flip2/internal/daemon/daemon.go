@@ -21,6 +21,7 @@ import (
 	"flip2/internal/auth"
 	"flip2/internal/commmonitor"
 	"flip2/internal/config"
+	"flip2/internal/costtracker"
 	"flip2/internal/executor"
 	"flip2/internal/llm"
 	"flip2/internal/logger"
@@ -58,6 +59,8 @@ type Daemon struct {
 	msgArchiver    *archiver.Archiver
 	// Supervisor for fault tolerance
 	supervisor     *supervisor.Supervisor
+	// Cost tracker for LLM API costs
+	costTracker    *costtracker.Tracker
 }
 
 // New creates a new Daemon instance
@@ -195,6 +198,7 @@ func (d *Daemon) Start() error {
 	d.initializeArchiver()
 
 	// Initialize FLIP2 API components (Step 3)
+	// This also initializes the cost tracker
 	d.initializeFLIP2API()
 
 	d.logger.Info("PocketBase initialized", "port", d.config.Flip2.PocketBase.Port)
@@ -1392,6 +1396,11 @@ func (d *Daemon) initializeFLIP2API() {
 	d.llmRegistry = llm.DefaultRegistry()
 	d.logger.Info("LLM Registry initialized", "backends", d.llmRegistry.List())
 
+	// Initialize Cost Tracker with PocketBase store
+	costStore := costtracker.NewPBStore(d.pb)
+	d.costTracker = costtracker.New(costStore, d.logger)
+	d.logger.Info("Cost Tracker initialized")
+
 	// Initialize Task Queue
 	queueConfig := queue.QueueConfig{
 		PocketBase:      d.pb,
@@ -1405,8 +1414,8 @@ func (d *Daemon) initializeFLIP2API() {
 	d.taskQueue = queue.NewQueue(queueConfig)
 	d.logger.Info("Task Queue initialized (will start after PocketBase is ready)")
 
-	// Initialize API Handlers
-	d.apiHandlers = api.NewAPIHandlers(d.pb, d.llmRegistry, d.taskQueue)
+	// Initialize API Handlers with cost tracker
+	d.apiHandlers = api.NewAPIHandlers(d.pb, d.llmRegistry, d.taskQueue, d.costTracker)
 
 	// Register API routes via OnServe hook
 	d.pb.OnServe().BindFunc(func(e *core.ServeEvent) error {

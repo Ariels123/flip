@@ -2,10 +2,13 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
 
+	"flip2/internal/costtracker"
 	"flip2/internal/llm"
 	"flip2/internal/queue"
 
@@ -15,18 +18,25 @@ import (
 
 // APIHandlers provides HTTP handlers for the FLIP2 API
 type APIHandlers struct {
-	pb       *pocketbase.PocketBase
-	registry *llm.Registry
-	queue    *queue.Queue
+	pb          *pocketbase.PocketBase
+	registry    *llm.Registry
+	queue       *queue.Queue
+	costTracker *costtracker.Tracker
 }
 
 // NewAPIHandlers creates a new API handlers instance
-func NewAPIHandlers(pb *pocketbase.PocketBase, registry *llm.Registry, q *queue.Queue) *APIHandlers {
+func NewAPIHandlers(pb *pocketbase.PocketBase, registry *llm.Registry, q *queue.Queue, ct *costtracker.Tracker) *APIHandlers {
 	return &APIHandlers{
-		pb:       pb,
-		registry: registry,
-		queue:    q,
+		pb:          pb,
+		registry:    registry,
+		queue:       q,
+		costTracker: ct,
 	}
+}
+
+// SetCostTracker sets the cost tracker for the API handlers
+func (h *APIHandlers) SetCostTracker(ct *costtracker.Tracker) {
+	h.costTracker = ct
 }
 
 // === Agent Endpoints ===
@@ -389,12 +399,36 @@ func (h *APIHandlers) HandleInvokeLLM(e *core.RequestEvent) error {
 		})
 	}
 
+	// Record cost if tracker is available
+	if h.costTracker != nil {
+		// Get agent ID from request header or use "api" as default
+		agentID := e.Request.Header.Get("X-Agent-ID")
+		if agentID == "" {
+			agentID = "api"
+		}
+
+		// Record the cost (use empty string for task_id since this is a direct API call)
+		if err := h.costTracker.RecordCost(
+			context.Background(),
+			agentID,
+			response.Model,
+			"", // No task_id for direct API calls
+			response.InputTokens,
+			response.OutputTokens,
+			response.CostUSD,
+		); err != nil {
+			// Log error but don't fail the request
+			// The cost tracking is non-critical for API functionality
+		}
+	}
+
 	return e.JSON(http.StatusOK, map[string]interface{}{
 		"backend":       backend.Name(),
 		"model":         response.Model,
 		"content":       response.Content,
 		"input_tokens":  response.InputTokens,
 		"output_tokens": response.OutputTokens,
+		"cost_usd":      response.CostUSD,
 		"latency":       response.Latency.String(),
 	})
 }
@@ -588,4 +622,143 @@ func cond(condition bool, ifTrue, ifFalse string) string {
 		return ifTrue
 	}
 	return ifFalse
+}
+
+// === Cost Stats Endpoints ===
+
+// HandleGetCostSummary returns overall cost summary
+func (h *APIHandlers) HandleGetCostSummary(e *core.RequestEvent) error {
+	if h.costTracker == nil {
+		return e.JSON(http.StatusServiceUnavailable, map[string]string{
+			"error": "Cost tracker not available",
+		})
+	}
+
+	// Parse days parameter (default: 1 day)
+	daysStr := e.Request.URL.Query().Get("days")
+	days := 1
+	if daysStr != "" {
+		parsedDays, err := strconv.Atoi(daysStr)
+		if err != nil || parsedDays < 1 {
+			return e.JSON(http.StatusBadRequest, map[string]string{
+				"error": "Invalid days parameter (must be positive integer)",
+			})
+		}
+		days = parsedDays
+	}
+
+	// Calculate date range
+	end := time.Now()
+	start := end.Add(-time.Duration(days) * 24 * time.Hour)
+
+	// Get summary from cost tracker
+	summary, err := h.costTracker.GetSummary(e.Request.Context(), start, end)
+	if err != nil {
+		return e.JSON(http.StatusInternalServerError, map[string]string{
+			"error":   "Failed to retrieve cost summary",
+			"details": err.Error(),
+		})
+	}
+
+	return e.JSON(http.StatusOK, summary)
+}
+
+// HandleGetCostsByAgent returns costs for a specific agent
+func (h *APIHandlers) HandleGetCostsByAgent(e *core.RequestEvent) error {
+	if h.costTracker == nil {
+		return e.JSON(http.StatusServiceUnavailable, map[string]string{
+			"error": "Cost tracker not available",
+		})
+	}
+
+	// Get agent_id from path
+	agentID := e.Request.PathValue("agent_id")
+	if agentID == "" {
+		return e.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Agent ID required",
+		})
+	}
+
+	// Parse days parameter (default: 1 day)
+	daysStr := e.Request.URL.Query().Get("days")
+	days := 1
+	if daysStr != "" {
+		parsedDays, err := strconv.Atoi(daysStr)
+		if err != nil || parsedDays < 1 {
+			return e.JSON(http.StatusBadRequest, map[string]string{
+				"error": "Invalid days parameter (must be positive integer)",
+			})
+		}
+		days = parsedDays
+	}
+
+	// Calculate date range
+	end := time.Now()
+	start := end.Add(-time.Duration(days) * 24 * time.Hour)
+
+	// Get costs by agent
+	costs, err := h.costTracker.GetAgentCosts(e.Request.Context(), agentID, start, end)
+	if err != nil {
+		return e.JSON(http.StatusInternalServerError, map[string]string{
+			"error":   "Failed to retrieve agent costs",
+			"details": err.Error(),
+		})
+	}
+
+	return e.JSON(http.StatusOK, map[string]interface{}{
+		"agent_id": agentID,
+		"days":     days,
+		"costs":    costs,
+		"count":    len(costs),
+	})
+}
+
+// HandleGetCostsByModel returns costs for a specific model
+func (h *APIHandlers) HandleGetCostsByModel(e *core.RequestEvent) error {
+	if h.costTracker == nil {
+		return e.JSON(http.StatusServiceUnavailable, map[string]string{
+			"error": "Cost tracker not available",
+		})
+	}
+
+	// Get model from path
+	model := e.Request.PathValue("model")
+	if model == "" {
+		return e.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Model name required",
+		})
+	}
+
+	// Parse days parameter (default: 1 day)
+	daysStr := e.Request.URL.Query().Get("days")
+	days := 1
+	if daysStr != "" {
+		parsedDays, err := strconv.Atoi(daysStr)
+		if err != nil || parsedDays < 1 {
+			return e.JSON(http.StatusBadRequest, map[string]string{
+				"error": "Invalid days parameter (must be positive integer)",
+			})
+		}
+		days = parsedDays
+	}
+
+	// Calculate date range
+	end := time.Now()
+	start := end.Add(-time.Duration(days) * 24 * time.Hour)
+
+	// Get costs by model
+	costs, err := h.costTracker.GetModelCosts(e.Request.Context(), model, start, end)
+	if err != nil {
+		return e.JSON(http.StatusInternalServerError, map[string]string{
+			"error":   "Failed to retrieve model costs",
+			"details": err.Error(),
+		})
+	}
+
+	return e.JSON(http.StatusOK, map[string]interface{}{
+		"model": model,
+		"days":  days,
+		"costs": costs,
+		"count": len(costs),
+	})
 }

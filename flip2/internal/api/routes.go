@@ -30,4 +30,9 @@ func (h *APIHandlers) RegisterAPIRoutes(r *router.Router[*core.RequestEvent]) {
 
 	// === Health Endpoint ===
 	r.GET("/api/flip/health", h.HandleHealth)
+
+	// === Cost Stats Endpoints ===
+	r.GET("/api/stats/summary", h.HandleGetCostSummary)
+	r.GET("/api/stats/costs/agent/{agent_id}", h.HandleGetCostsByAgent)
+	r.GET("/api/stats/costs/model/{model}", h.HandleGetCostsByModel)
 }
