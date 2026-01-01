@@ -31,6 +31,7 @@ import (
 	"flip2/internal/sync"
 
 	pocketbase "github.com/pocketbase/pocketbase"
+	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tools/router"
 	"github.com/pocketbase/pocketbase/tools/types"
@@ -1425,6 +1426,13 @@ func (d *Daemon) initializeFLIP2API() {
 				"/api/agents", "/api/tasks", "/api/llm/invoke",
 				"/api/llm/backends", "/api/signals", "/api/flip/health",
 			})
+		return e.Next()
+	})
+
+	// Serve static files from pb_public directory
+	d.pb.OnServe().BindFunc(func(e *core.ServeEvent) error {
+		e.Router.GET("/{path...}", apis.Static(os.DirFS("./pb_public"), false))
+		d.logger.Info("Static file serving enabled", "directory", "./pb_public")
 		return e.Next()
 	})
 
