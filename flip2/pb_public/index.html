@@ -152,21 +152,64 @@
         </div>
       </div>
 
-      <!-- System Health Placeholder -->
+      <!-- System Health Panel -->
       <div class="bg-slate-800 rounded-lg p-6 border border-slate-700">
         <h2 class="text-lg font-semibold mb-4">System Health</h2>
-        <div class="space-y-4">
-          <div>
-            <div class="text-sm text-slate-400 mb-1">Database Size</div>
-            <div class="text-slate-300">Metrics coming in Phase 4</div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <!-- Database Size -->
+          <div class="bg-slate-900 rounded-lg p-4 border border-slate-700">
+            <div class="text-sm text-slate-400 mb-2">Database Size</div>
+            <div class="flex items-baseline gap-2">
+              <span
+                class="text-2xl font-bold"
+                :class="{
+                  'text-emerald-500': healthMetrics.dbSizeMB < 100,
+                  'text-amber-500': healthMetrics.dbSizeMB >= 100 && healthMetrics.dbSizeMB < 500,
+                  'text-red-500': healthMetrics.dbSizeMB >= 500
+                }"
+                x-text="healthMetrics.dbSizeMB.toFixed(2)"
+              ></span>
+              <span class="text-sm text-slate-500">MB</span>
+            </div>
           </div>
-          <div>
-            <div class="text-sm text-slate-400 mb-1">Memory Usage</div>
-            <div class="text-slate-300">Metrics coming in Phase 4</div>
+
+          <!-- Memory Usage -->
+          <div class="bg-slate-900 rounded-lg p-4 border border-slate-700">
+            <div class="text-sm text-slate-400 mb-2">Memory Usage</div>
+            <div class="text-sm text-slate-500">
+              N/A - Server-side metric
+            </div>
           </div>
-          <div>
-            <div class="text-sm text-slate-400 mb-1">Uptime</div>
-            <div class="text-slate-300">Metrics coming in Phase 4</div>
+
+          <!-- Uptime -->
+          <div class="bg-slate-900 rounded-lg p-4 border border-slate-700">
+            <div class="text-sm text-slate-400 mb-2">Uptime</div>
+            <div class="text-2xl font-bold text-emerald-500" x-text="healthMetrics.uptime"></div>
+          </div>
+
+          <!-- Error Rate -->
+          <div class="bg-slate-900 rounded-lg p-4 border border-slate-700">
+            <div class="text-sm text-slate-400 mb-2">Error Rate (1h)</div>
+            <div class="flex items-baseline gap-2">
+              <span
+                class="text-2xl font-bold"
+                :class="{
+                  'text-emerald-500': healthMetrics.errorRate < 5,
+                  'text-amber-500': healthMetrics.errorRate >= 5 && healthMetrics.errorRate < 20,
+                  'text-red-500': healthMetrics.errorRate >= 20
+                }"
+                x-text="healthMetrics.errorCount"
+              ></span>
+              <span
+                class="text-sm"
+                :class="{
+                  'text-emerald-600': healthMetrics.errorRate < 5,
+                  'text-amber-600': healthMetrics.errorRate >= 5 && healthMetrics.errorRate < 20,
+                  'text-red-600': healthMetrics.errorRate >= 20
+                }"
+                x-text="'(' + healthMetrics.errorRate.toFixed(1) + '%)'"
+              ></span>
+            </div>
           </div>
         </div>
       </div>
@@ -176,7 +219,7 @@
   <!-- Footer -->
   <footer class="bg-slate-800 border-t border-slate-700 px-6 py-4 mt-8">
     <div class="text-center text-sm text-slate-500">
-      FLIP2 Monitoring Dashboard v1.0 - Phase 3 (Chart Visualizations)
+      FLIP2 Monitoring Dashboard v1.0 - Phase 4 (System Health Panel)
     </div>
   </footer>
 </body>

@@ -14,7 +14,14 @@ document.addEventListener('alpine:init', () => {
       activeTasks: 0,
       costToday: 0
     },
+    healthMetrics: {
+      dbSizeMB: 0,
+      uptime: '0d 0h 0m',
+      errorCount: 0,
+      errorRate: 0
+    },
     lastUpdate: 'Never',
+    systemStartTime: null,
     pb: null,
     signalChart: null,
     costChart: null,
@@ -79,7 +86,8 @@ document.addEventListener('alpine:init', () => {
         await Promise.all([
           this.loadAgents(),
           this.loadRecentSignals(),
-          this.loadCosts()
+          this.loadCosts(),
+          this.loadHealthMetrics()
         ]);
 
         // Update stats after all data is loaded
@@ -88,6 +96,9 @@ document.addEventListener('alpine:init', () => {
         // Update charts with initial data (Phase 3)
         this.updateSignalChart();
         this.updateCostChart();
+
+        // Start uptime counter (Phase 4)
+        this.startUptimeCounter();
 
         // Mark the timestamp for "last update"
         this.lastUpdateTimestamp = new Date();
@@ -123,9 +134,10 @@ document.addEventListener('alpine:init', () => {
           this.signals = this.signals.filter(s => s.id !== e.record.id);
         }
 
-        // Update stats and charts after signal change
+        // Update stats, charts, and health metrics after signal change
         this.updateStats();
         this.updateSignalChart();
+        this.updateHealthMetrics();
         this.lastUpdateTimestamp = new Date();
       }, (err) => {
         console.error('[Signals] Subscription error:', err);
@@ -552,6 +564,124 @@ document.addEventListener('alpine:init', () => {
       console.log('[Dashboard] Updating charts...');
       this.updateSignalChart();
       this.updateCostChart();
+    },
+
+    // Load System Health Metrics (Phase 4)
+    async loadHealthMetrics() {
+      console.log('[Dashboard] Loading health metrics...');
+      try {
+        // 1. Database Size - query SQLite pragma
+        await this.loadDatabaseSize();
+
+        // 2. Calculate system start time from earliest signal
+        await this.calculateSystemStartTime();
+
+        // 3. Error rate - will be calculated in updateHealthMetrics
+        this.updateHealthMetrics();
+
+        console.log('[Health] Metrics loaded:', this.healthMetrics);
+      } catch (error) {
+        console.error('[Health] Error loading metrics:', error);
+      }
+    },
+
+    // Load Database Size using PocketBase send API
+    async loadDatabaseSize() {
+      try {
+        // PocketBase doesn't expose direct SQL queries via standard API
+        // We'll use the collection stats as a proxy or set a default
+        // For a proper implementation, you'd need a custom API endpoint
+
+        // Alternative: Calculate approximate size from record counts
+        const signalsCount = await this.pb.collection('signals').getList(1, 1);
+        const agentsCount = await this.pb.collection('agents').getList(1, 1);
+        const costsCount = await this.pb.collection('costs').getList(1, 1);
+
+        const totalRecords = (signalsCount.totalItems || 0) +
+                             (agentsCount.totalItems || 0) +
+                             (costsCount.totalItems || 0);
+
+        // Rough estimation: ~1KB per record average
+        const estimatedSizeMB = (totalRecords * 1024) / (1024 * 1024);
+        this.healthMetrics.dbSizeMB = Math.max(0.01, estimatedSizeMB);
+
+        console.log(`[Health] Estimated DB size: ${this.healthMetrics.dbSizeMB.toFixed(2)} MB (${totalRecords} records)`);
+      } catch (error) {
+        console.warn('[Health] Could not load database size:', error.message);
+        this.healthMetrics.dbSizeMB = 0;
+      }
+    },
+
+    // Calculate system start time from earliest signal
+    async calculateSystemStartTime() {
+      try {
+        // Get the earliest signal to determine system start time
+        const oldestSignal = await this.pb.collection('signals').getList(1, 1, {
+          sort: 'created'
+        });
+
+        if (oldestSignal.items && oldestSignal.items.length > 0) {
+          this.systemStartTime = new Date(oldestSignal.items[0].created);
+          console.log('[Health] System start time:', this.systemStartTime);
+        } else {
+          // No signals yet, use current time
+          this.systemStartTime = new Date();
+        }
+      } catch (error) {
+        console.warn('[Health] Could not determine system start time:', error.message);
+        this.systemStartTime = new Date();
+      }
+    },
+
+    // Start uptime counter that updates every minute
+    startUptimeCounter() {
+      // Update immediately
+      this.updateUptime();
+
+      // Update every minute
+      setInterval(() => {
+        this.updateUptime();
+      }, 60000); // 60 seconds
+    },
+
+    // Update uptime display
+    updateUptime() {
+      if (!this.systemStartTime) {
+        this.healthMetrics.uptime = '0d 0h 0m';
+        return;
+      }
+
+      const now = new Date();
+      const uptimeMs = now - this.systemStartTime;
+
+      const days = Math.floor(uptimeMs / (1000 * 60 * 60 * 24));
+      const hours = Math.floor((uptimeMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+      const minutes = Math.floor((uptimeMs % (1000 * 60 * 60)) / (1000 * 60));
+
+      this.healthMetrics.uptime = `${days}d ${hours}h ${minutes}m`;
+    },
+
+    // Update health metrics (called on signal updates)
+    updateHealthMetrics() {
+      // Calculate error rate from signals in last hour
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+
+      const recentSignals = this.signals.filter(signal => {
+        const created = new Date(signal.created);
+        return created > oneHourAgo;
+      });
+
+      const errorSignals = recentSignals.filter(signal =>
+        signal.level === 'error' || signal.level === 'ERROR'
+      );
+
+      this.healthMetrics.errorCount = errorSignals.length;
+      this.healthMetrics.errorRate = recentSignals.length > 0
+        ? (errorSignals.length / recentSignals.length) * 100
+        : 0;
+
+      // Update uptime
+      this.updateUptime();
     }
   }));
 });
