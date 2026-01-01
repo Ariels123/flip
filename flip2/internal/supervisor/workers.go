@@ -73,8 +73,8 @@ func (w *SchedulerWorker) Start(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	w.cancel = cancel
 
-	// Start the scheduler (non-blocking, uses internal cron)
-	w.scheduler.Start()
+	// Start the scheduler with parent context for graceful shutdown
+	w.scheduler.Start(runCtx)
 
 	// Block until context is cancelled
 	<-runCtx.Done()

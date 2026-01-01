@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -40,6 +41,10 @@ const (
 var (
 	apiURL string
 	logger *slog.Logger
+
+	// validIdentifier matches alphanumeric, hyphens, and underscores only
+	// Used for agent IDs, collection names, field names to prevent SQL injection
+	validIdentifier = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 )
 
 // setupLogCapture redirects os.Stdout and os.Stderr to a temporary file,
@@ -629,6 +634,11 @@ func pollAgent(agentID string) error {
 		loadGlobalConfig()
 	}
 
+	// Validate agent ID to prevent SQL injection
+	if !validIdentifier.MatchString(agentID) {
+		return fmt.Errorf("invalid agent_id format: %q (must be alphanumeric with hyphens/underscores)", agentID)
+	}
+
 	// 1. Get record ID for this agent
 	filter := fmt.Sprintf("(to_agent='%s' && read=false)", agentID)
 	urlVal := fmt.Sprintf("%s/api/collections/signals/records?filter=%s", apiURL, url.QueryEscape(filter))
@@ -1211,6 +1221,12 @@ func getAgentRecordID(agentID string) (string, error) {
 	if globalConfig == nil {
 		loadGlobalConfig()
 	}
+
+	// Validate agent ID to prevent SQL injection
+	if !validIdentifier.MatchString(agentID) {
+		return "", fmt.Errorf("invalid agent_id format: %q (must be alphanumeric with hyphens/underscores)", agentID)
+	}
+
 	// Look up agent by 'agent_id' field
 	filter := fmt.Sprintf("(agent_id='%s')", agentID)
 	urlVal := fmt.Sprintf("%s/api/collections/agents/records?filter=%s", apiURL, url.QueryEscape(filter))
@@ -1374,6 +1390,18 @@ func getRecordIDByField(collection, field, value string) (string, error) {
 	if globalConfig == nil {
 		loadGlobalConfig()
 	}
+
+	// Validate collection, field, and value to prevent SQL injection
+	if !validIdentifier.MatchString(collection) {
+		return "", fmt.Errorf("invalid collection name: %q (must be alphanumeric with hyphens/underscores)", collection)
+	}
+	if !validIdentifier.MatchString(field) {
+		return "", fmt.Errorf("invalid field name: %q (must be alphanumeric with hyphens/underscores)", field)
+	}
+	if !validIdentifier.MatchString(value) {
+		return "", fmt.Errorf("invalid value format: %q (must be alphanumeric with hyphens/underscores)", value)
+	}
+
 	urlVal := fmt.Sprintf("%s/api/collections/%s/records?filter=(%s='%s')", apiURL, collection, field, value)
 	req, _ := http.NewRequest("GET", urlVal, nil)
 	setAuthHeaders(req)

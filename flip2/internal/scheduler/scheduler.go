@@ -19,6 +19,7 @@ type Scheduler struct {
 	logger  *slog.Logger
 	mu      sync.Mutex
 	running bool
+	ctx     context.Context // Parent context for graceful shutdown
 }
 
 // Job represents a scheduled task
@@ -59,14 +60,15 @@ func (s *Scheduler) RegisterJob(name string, cronExpr string, handler func(conte
 	}
 }
 
-// Start starts the scheduler
-func (s *Scheduler) Start() {
+// Start starts the scheduler with the given parent context for graceful shutdown
+func (s *Scheduler) Start(ctx context.Context) {
 	s.mu.Lock()
 	if s.running {
 		s.mu.Unlock()
 		return
 	}
 	s.running = true
+	s.ctx = ctx
 	s.mu.Unlock()
 
 	s.logger.Info("Starting scheduler")
@@ -110,12 +112,18 @@ func (s *Scheduler) Stop() {
 
 func (s *Scheduler) runJob(name string, job *Job) {
 	s.logger.Info("Running job", "name", name)
-	
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+
+	// Use parent context for graceful shutdown, with timeout
+	parentCtx := s.ctx
+	if parentCtx == nil {
+		// Fallback to background if no parent context set (shouldn't happen)
+		parentCtx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parentCtx, 5*time.Minute)
 	defer cancel()
 
 	job.LastRun = time.Now()
-	
+
 	err := job.Handler(ctx)
 	
 	if err != nil {

@@ -13,8 +13,14 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sync"
 	"time"
+)
+
+var (
+	// validAgentName matches alphanumeric, hyphens, and underscores only
+	validAgentName = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 )
 
 // Config holds archiver configuration.
@@ -142,12 +148,11 @@ func New(config Config, store SignalStore, logger *slog.Logger) *Archiver {
 // Start begins the archiving background process.
 func (a *Archiver) Start(ctx context.Context) error {
 	a.mu.Lock()
+	defer a.mu.Unlock()
+
 	if a.running {
-		a.mu.Unlock()
 		return fmt.Errorf("archiver already running")
 	}
-	a.running = true
-	a.mu.Unlock()
 
 	a.logger.Info("Starting message archiver",
 		"check_interval", a.config.CheckInterval,
@@ -155,6 +160,7 @@ func (a *Archiver) Start(ctx context.Context) error {
 		"batch_size", a.config.BatchSize,
 	)
 
+	a.running = true
 	go a.run(ctx)
 	return nil
 }
@@ -360,6 +366,14 @@ func (a *Archiver) purgeDeprecated(ctx context.Context) (int, error) {
 	for _, agent := range a.config.DeprecatedAgents {
 		// Skip if agent is also in active list (shouldn't happen but safety check)
 		if a.isActiveAgent(agent) {
+			continue
+		}
+
+		// Validate agent name to prevent SQL injection
+		if !validAgentName.MatchString(agent) {
+			a.logger.Warn("Skipping deprecated agent with invalid name format",
+				"agent", agent,
+			)
 			continue
 		}
 
