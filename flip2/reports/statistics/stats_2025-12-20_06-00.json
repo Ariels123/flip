@@ -1,0 +1,61 @@
+{
+  "anomalies": [
+    {
+      "message": "High number of unread signals: 525 (threshold: 100)",
+      "severity": "warning",
+      "type": "high_unread_count",
+      "value": 525
+    },
+    {
+      "message": "No signal activity in the last 24 hours",
+      "severity": "warning",
+      "type": "no_recent_activity",
+      "value": 0
+    }
+  ],
+  "anomaly_count": 2,
+  "by_from_agent": {
+    "AG-win": 7,
+    "Claud-win": 39,
+    "WinPc-AG": 2,
+    "ag-win": 8,
+    "antigravity": 1,
+    "antigravity-win": 1,
+    "claud-win": 25,
+    "claude": 295,
+    "claude-mac": 190,
+    "claude-test": 1,
+    "claude-win": 79,
+    "cli": 30,
+    "comm-monitor": 168,
+    "gemini": 323
+  },
+  "by_signal_type": {
+    "alert": 4,
+    "message": 1137,
+    "ping": 2,
+    "status": 2,
+    "task": 24
+  },
+  "by_to_agent": {
+    "AG-win": 12,
+    "ALL": 1,
+    "Claud-win": 88,
+    "WinPc-AG": 6,
+    "ag-win": 9,
+    "antigravity": 19,
+    "claud-win": 183,
+    "claude": 268,
+    "claude-mac": 75,
+    "claude-test": 1,
+    "claude-win": 167,
+    "claudwin": 4,
+    "cli": 30,
+    "coordinator": 1,
+    "gemini": 305
+  },
+  "node_id": "mac",
+  "timestamp": "2025-12-20T06:00:00",
+  "total_signals": 1169,
+  "unread_signals": 525
+}

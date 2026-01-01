@@ -1,0 +1,80 @@
+flip2:
+  daemon:
+    pid_file: C:\flip2\flip2d.pid
+    log_file: C:\flip2\flip2d.log
+    log_level: info
+
+  pocketbase:
+    host: 0.0.0.0
+    port: 8090
+    data_dir: C:\flip2\pb_data
+
+  backends:
+    claude:
+      command: claude
+      args:
+        - "-p"
+        - "--dangerously-skip-permissions"
+        - "--output-format"
+        - "text"
+      timeout: 300s
+      type: process
+
+  scheduler:
+    timezone: UTC
+    max_concurrent_jobs: 4
+    jobs:
+      health-check:
+        cron: "0 */1 * * * *"
+        enabled: true
+      task-executor:
+        cron: "*/30 * * * * *"
+        enabled: true
+
+  executor:
+    max_concurrent_tasks: 3
+    default_timeout: 300s
+    retry_attempts: 2
+    retry_delay: 30s
+    worker_prefix: |
+      You are a WORKER agent in the FLIP2 multi-agent system.
+      Complete your assigned task and report results clearly.
+      Do NOT spawn additional agents without explicit approval.
+
+  metrics:
+    enabled: true
+    retention_days: 30
+
+  security:
+    admin_email: admin@localhost
+    api_keys_enabled: true
+    api_key: flip2_secret_key_123
+    jwt_secret: flip2_jwt_secret_key_456
+    bootstrap_api_key: flip2_bootstrap_key_789
+
+  sync:
+    enabled: true
+    node_id: windows
+    sync_interval: 15s
+    peers:
+      - id: mac
+        url: http://192.168.1.53:8090
+        api_key: flip2_secret_key_123
+        enabled: true
+        # Port 8090 = Production on ALL systems (consistent convention)
+
+  archiver:
+    enabled: true
+    active_retention_days: 3
+    recent_retention_days: 90
+    check_interval: 6h
+    batch_size: 200
+    archive_path: C:\flip2\archives\signals
+    active_agents:
+      - claude-mac
+      - claude-win
+    deprecated_agents:
+      - gemini
+      - claude
+      - cli
+      - antigravity

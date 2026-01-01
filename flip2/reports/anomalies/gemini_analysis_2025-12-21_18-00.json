@@ -1,0 +1,69 @@
+{
+  "analysis": "### FLIP2 System Analysis\n\nHere is the analysis of the provided statistics for node `mac`.\n\n#### 1. Are the anomalies concerning?\n**Yes, critical.**\nThe combination of **527 unread signals** and **zero activity in the last 24 hours** indicates a **stalled system**.\n*   **High Unread Count:** Nearly 50% of all signals (527/1171) are unread. This suggests that consumer agents are either offline, crashed, or misconfigured (listening to the wrong queues).\n*   **No Recent Activity:** The system has effectively stopped. The \"unread\" backlog likely accumulated before the cessation of activity.\n\n#### 2. Signal Distribution Patterns\n*   **Identity Fragmentation (Major Issue):** There are significant naming inconsistencies splitting signal routing.\n    *   `Claud-win`, `claud-win`, `claude-win`, `claudwin` appear to be the same entity but are treated as distinct endpoints.\n    *   `AG-win`, `ag-win`, `WinPc-AG` show similar fragmentation.\n*   **Signal Type Imbalance:** 97% of traffic is `message` type (1138), while only 2% are `task` signals. The system is functioning primarily as a chat log rather than an execution engine.\n*   **Top Actors:** `gemini` and `claude` (and variants) drive the majority of traffic. `comm-monitor` is active (168 sent), likely broadcasting alerts that are being ignored, contributing to the noise.\n\n#### 3. Recommendations for System Health\n*   **Immediate Action:** Restart the `flip2d` daemon and all agent processes on the `mac` node to resume signal consumption.\n*   **Standardize Agent IDs:** Enforce strict naming conventions (e.g., lowercase, kebab-case) in the `config.yaml` and database to merge fragmented identities (e.g., merge `Claud-win` -\u003e `claude-win`).\n*   **Database Cleanup:** Prune the 527 unread signals if they are stale (\u003e24h old) to allow the system to recover without processing outdated context.\n*   **Review `comm-monitor`:** Ensure the monitor stops sending signals if the unread count exceeds a safety ceiling to prevent \"alert flooding.\"\n\n#### 4. Early Warning Signs\n*   **Naming Drift:** The appearance of new variations like `claudwin` or `WinPc-AG` signals sloppy configuration or manual entry errors that will lead to \"orphaned\" queues.\n*   **High Unread-to-Total Ratio:** An unread ratio approaching 50% is a lagging indicator of failure. Monitor for a rising trend in unread signals *before* it hits the 100 threshold.",
+  "analyzer": "gemini",
+  "latency_ms": 22085,
+  "model": "gemini-2.5-flash",
+  "prompt": "You are analyzing FLIP2 multi-agent system statistics.\n\nCurrent statistics:\n{\n  \"anomalies\": [\n    {\n      \"message\": \"High number of unread signals: 527 (threshold: 100)\",\n      \"severity\": \"warning\",\n      \"type\": \"high_unread_count\",\n      \"value\": 527\n    },\n    {\n      \"message\": \"No signal activity in the last 24 hours\",\n      \"severity\": \"warning\",\n      \"type\": \"no_recent_activity\",\n      \"value\": 0\n    }\n  ],\n  \"anomaly_count\": 2,\n  \"by_from_agent\": {\n    \"AG-win\": 7,\n    \"Claud-win\": 39,\n    \"WinPc-AG\": 2,\n    \"ag-win\": 8,\n    \"antigravity\": 1,\n    \"antigravity-win\": 1,\n    \"claud-win\": 25,\n    \"claude\": 295,\n    \"claude-mac\": 192,\n    \"claude-test\": 1,\n    \"claude-win\": 79,\n    \"cli\": 30,\n    \"comm-monitor\": 168,\n    \"gemini\": 323\n  },\n  \"by_signal_type\": {\n    \"alert\": 4,\n    \"message\": 1138,\n    \"ping\": 2,\n    \"status\": 2,\n    \"task\": 25\n  },\n  \"by_to_agent\": {\n    \"AG-win\": 12,\n    \"ALL\": 1,\n    \"Claud-win\": 88,\n    \"WinPc-AG\": 6,\n    \"ag-win\": 9,\n    \"antigravity\": 19,\n    \"claud-win\": 183,\n    \"claude\": 268,\n    \"claude-mac\": 75,\n    \"claude-test\": 1,\n    \"claude-win\": 169,\n    \"claudwin\": 4,\n    \"cli\": 30,\n    \"coordinator\": 1,\n    \"gemini\": 305\n  },\n  \"node_id\": \"mac\",\n  \"timestamp\": \"2025-12-21T18:00:00\",\n  \"total_signals\": 1171,\n  \"unread_signals\": 527\n}\n\nAnomalies detected:\n{\n  \"anomalies\": [\n    {\n      \"message\": \"High number of unread signals: 527 (threshold: 100)\",\n      \"severity\": \"warning\",\n      \"type\": \"high_unread_count\",\n      \"value\": 527\n    },\n    {\n      \"message\": \"No signal activity in the last 24 hours\",\n      \"severity\": \"warning\",\n      \"type\": \"no_recent_activity\",\n      \"value\": 0\n    }\n  ],\n  \"node_id\": \"mac\",\n  \"statistics\": {\n    \"anomalies\": [\n      {\n        \"message\": \"High number of unread signals: 527 (threshold: 100)\",\n        \"severity\": \"warning\",\n        \"type\": \"high_unread_count\",\n        \"value\": 527\n      },\n      {\n        \"message\": \"No signal activity in the last 24 hours\",\n        \"severity\": \"warning\",\n        \"type\": \"no_recent_activity\",\n        \"value\": 0\n      }\n    ],\n    \"anomaly_count\": 2,\n    \"by_from_agent\": {\n      \"AG-win\": 7,\n      \"Claud-win\": 39,\n      \"WinPc-AG\": 2,\n      \"ag-win\": 8,\n      \"antigravity\": 1,\n      \"antigravity-win\": 1,\n      \"claud-win\": 25,\n      \"claude\": 295,\n      \"claude-mac\": 192,\n      \"claude-test\": 1,\n      \"claude-win\": 79,\n      \"cli\": 30,\n      \"comm-monitor\": 168,\n      \"gemini\": 323\n    },\n    \"by_signal_type\": {\n      \"alert\": 4,\n      \"message\": 1138,\n      \"ping\": 2,\n      \"status\": 2,\n      \"task\": 25\n    },\n    \"by_to_agent\": {\n      \"AG-win\": 12,\n      \"ALL\": 1,\n      \"Claud-win\": 88,\n      \"WinPc-AG\": 6,\n      \"ag-win\": 9,\n      \"antigravity\": 19,\n      \"claud-win\": 183,\n      \"claude\": 268,\n      \"claude-mac\": 75,\n      \"claude-test\": 1,\n      \"claude-win\": 169,\n      \"claudwin\": 4,\n      \"cli\": 30,\n      \"coordinator\": 1,\n      \"gemini\": 305\n    },\n    \"node_id\": \"mac\",\n    \"timestamp\": \"2025-12-21T18:00:00\",\n    \"total_signals\": 1171,\n    \"unread_signals\": 527\n  },\n  \"timestamp\": \"2025-12-21T18:00:00\"\n}\n\nPlease analyze these statistics and anomalies:\n1. Are the detected anomalies concerning?\n2. What patterns do you see in the signal distribution?\n3. Any recommendations for system health?\n4. Are there any early warning signs we should monitor?\n\nKeep your response concise (under 500 words) and actionable.",
+  "statistics": {
+    "anomalies": [
+      {
+        "message": "High number of unread signals: 527 (threshold: 100)",
+        "severity": "warning",
+        "type": "high_unread_count",
+        "value": 527
+      },
+      {
+        "message": "No signal activity in the last 24 hours",
+        "severity": "warning",
+        "type": "no_recent_activity",
+        "value": 0
+      }
+    ],
+    "anomaly_count": 2,
+    "by_from_agent": {
+      "AG-win": 7,
+      "Claud-win": 39,
+      "WinPc-AG": 2,
+      "ag-win": 8,
+      "antigravity": 1,
+      "antigravity-win": 1,
+      "claud-win": 25,
+      "claude": 295,
+      "claude-mac": 192,
+      "claude-test": 1,
+      "claude-win": 79,
+      "cli": 30,
+      "comm-monitor": 168,
+      "gemini": 323
+    },
+    "by_signal_type": {
+      "alert": 4,
+      "message": 1138,
+      "ping": 2,
+      "status": 2,
+      "task": 25
+    },
+    "by_to_agent": {
+      "AG-win": 12,
+      "ALL": 1,
+      "Claud-win": 88,
+      "WinPc-AG": 6,
+      "ag-win": 9,
+      "antigravity": 19,
+      "claud-win": 183,
+      "claude": 268,
+      "claude-mac": 75,
+      "claude-test": 1,
+      "claude-win": 169,
+      "claudwin": 4,
+      "cli": 30,
+      "coordinator": 1,
+      "gemini": 305
+    },
+    "node_id": "mac",
+    "timestamp": "2025-12-21T18:00:00",
+    "total_signals": 1171,
+    "unread_signals": 527
+  },
+  "timestamp": "2025-12-21T18:00:22"
+}

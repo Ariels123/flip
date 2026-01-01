@@ -1,0 +1,108 @@
+alerts:
+  # Database Health
+  - name: disk_space_critical
+    description: Auxiliary DB exceeds size threshold
+    metric: db_size_mb
+    threshold: 50
+    operator: ">"
+    severity: critical
+    enabled: true
+    channels:
+      - email
+      - slack
+
+  - name: disk_space_warning
+    description: Auxiliary DB approaching size limit
+    metric: db_size_mb
+    threshold: 30
+    operator: ">"
+    severity: warning
+    enabled: true
+    channels:
+      - slack
+
+  # Error Rate
+  - name: high_error_rate
+    description: Error rate exceeds acceptable threshold
+    metric: error_rate_percent
+    threshold: 5.0
+    operator: ">"
+    severity: warning
+    enabled: true
+    channels:
+      - slack
+
+  - name: critical_error_rate
+    description: Error rate critically high
+    metric: error_rate_percent
+    threshold: 20.0
+    operator: ">"
+    severity: critical
+    enabled: true
+    channels:
+      - email
+      - slack
+
+  # Sync Health (Mac-Windows)
+  - name: sync_failure
+    description: Multiple sync failures detected
+    metric: sync_failed_count_1h
+    threshold: 3
+    operator: ">"
+    severity: warning
+    enabled: false  # Disabled until Windows deployed
+    channels:
+      - slack
+
+  # System Health
+  - name: daemon_down
+    description: Health check failed
+    metric: health_check_failed
+    threshold: 1
+    operator: ">="
+    severity: critical
+    enabled: true
+    channels:
+      - email
+      - slack
+    actions:
+      - restart_daemon
+
+  - name: high_memory_usage
+    description: Memory usage exceeds threshold
+    metric: memory_mb
+    threshold: 500
+    operator: ">"
+    severity: warning
+    enabled: true
+    channels:
+      - slack
+
+  # Cost Monitoring
+  - name: daily_cost_exceeded
+    description: Daily LLM costs exceed budget
+    metric: cost_today_usd
+    threshold: 10.0
+    operator: ">"
+    severity: warning
+    enabled: true
+    channels:
+      - slack
+
+notification_channels:
+  slack:
+    enabled: true
+    webhook_url: "${SLACK_WEBHOOK_URL}"
+    default_channel: "#flip2-alerts"
+
+  email:
+    enabled: true
+    smtp_host: "${SMTP_HOST}"
+    smtp_port: 587
+    from: "flip2@localhost"
+    to:
+      - "admin@localhost"
+
+evaluation:
+  interval: 60s  # How often to evaluate rules
+  retention: 7d  # Keep alerts for 7 days

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -24,6 +25,7 @@ type Client struct {
 	stop       chan struct{}
 	httpClient *http.Client
 	logger     *slog.Logger
+	wg         sync.WaitGroup // Tracks connection goroutine lifecycle
 }
 
 type SignalEvent struct {
@@ -92,10 +94,13 @@ func (c *Client) Tasks() <-chan *TaskEvent {
 }
 
 func (c *Client) Connect() error {
+	c.wg.Add(1)
 	go func() {
+		defer c.wg.Done()
 		for {
 			select {
 			case <-c.stop:
+				c.logger.Info("Connection goroutine stopping")
 				return
 			default:
 				if err := c.connectOnce(); err != nil {
@@ -318,6 +323,9 @@ func (c *Client) UpdateSignal(signalID string, data map[string]interface{}) erro
 }
 
 // Close stops the SSE connection and cleans up resources
+// Blocks until the connection goroutine has exited
 func (c *Client) Close() {
 	close(c.stop)
+	c.wg.Wait() // Wait for connection goroutine to exit
+	c.logger.Info("Client closed gracefully")
 }
