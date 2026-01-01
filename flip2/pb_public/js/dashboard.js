@@ -16,12 +16,18 @@ document.addEventListener('alpine:init', () => {
     },
     lastUpdate: 'Never',
     pb: null,
+    signalChart: null,
+    costChart: null,
 
     // Initialize dashboard
     init() {
       console.log('[FLIP2 Dashboard] Initializing...');
       this.connectPocketBase();
       this.updateLastUpdateTime();
+
+      // Initialize charts (Phase 3)
+      this.initSignalChart();
+      this.initCostChart();
 
       // Update "last update" time every second
       setInterval(() => {
@@ -79,6 +85,10 @@ document.addEventListener('alpine:init', () => {
         // Update stats after all data is loaded
         await this.updateStats();
 
+        // Update charts with initial data (Phase 3)
+        this.updateSignalChart();
+        this.updateCostChart();
+
         // Mark the timestamp for "last update"
         this.lastUpdateTimestamp = new Date();
         console.log('[Dashboard] Initial data loaded successfully');
@@ -113,8 +123,9 @@ document.addEventListener('alpine:init', () => {
           this.signals = this.signals.filter(s => s.id !== e.record.id);
         }
 
-        // Update stats after signal change
+        // Update stats and charts after signal change
         this.updateStats();
+        this.updateSignalChart();
         this.lastUpdateTimestamp = new Date();
       }, (err) => {
         console.error('[Signals] Subscription error:', err);
@@ -162,8 +173,9 @@ document.addEventListener('alpine:init', () => {
           this.costs = this.costs.filter(c => c.id !== e.record.id);
         }
 
-        // Update stats after cost change
+        // Update stats and charts after cost change
         this.updateStats();
+        this.updateCostChart();
         this.lastUpdateTimestamp = new Date();
       }, (err) => {
         console.error('[Costs] Subscription error:', err);
@@ -309,9 +321,237 @@ document.addEventListener('alpine:init', () => {
       console.log('[Stats] Updated:', this.stats);
     },
 
+    // Initialize Signal Throughput Chart (Phase 3)
+    initSignalChart() {
+      const ctx = document.getElementById('signalThroughputChart');
+      if (!ctx) {
+        console.warn('[Charts] Signal throughput canvas not found');
+        return;
+      }
+
+      console.log('[Charts] Initializing signal throughput chart...');
+
+      this.signalChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: [],
+          datasets: [{
+            label: 'Signals/min',
+            data: [],
+            borderColor: '#8b5cf6',
+            backgroundColor: 'rgba(139, 92, 246, 0.1)',
+            borderWidth: 2,
+            tension: 0.4,
+            fill: true,
+            pointRadius: 3,
+            pointHoverRadius: 5,
+            pointBackgroundColor: '#8b5cf6',
+            pointBorderColor: '#fff',
+            pointBorderWidth: 1
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              display: false
+            },
+            tooltip: {
+              backgroundColor: 'rgba(15, 23, 42, 0.9)',
+              titleColor: '#f1f5f9',
+              bodyColor: '#f1f5f9',
+              borderColor: '#8b5cf6',
+              borderWidth: 1,
+              padding: 12,
+              displayColors: false
+            }
+          },
+          scales: {
+            x: {
+              grid: {
+                color: 'rgba(51, 65, 85, 0.5)',
+                borderColor: '#334155'
+              },
+              ticks: {
+                color: '#94a3b8',
+                font: {
+                  size: 11
+                }
+              }
+            },
+            y: {
+              beginAtZero: true,
+              grid: {
+                color: 'rgba(51, 65, 85, 0.5)',
+                borderColor: '#334155'
+              },
+              ticks: {
+                color: '#94a3b8',
+                font: {
+                  size: 11
+                },
+                precision: 0
+              }
+            }
+          }
+        }
+      });
+
+      console.log('[Charts] Signal throughput chart initialized');
+    },
+
+    // Initialize Cost Breakdown Chart (Phase 3)
+    initCostChart() {
+      const ctx = document.getElementById('costBreakdownChart');
+      if (!ctx) {
+        console.warn('[Charts] Cost breakdown canvas not found');
+        return;
+      }
+
+      console.log('[Charts] Initializing cost breakdown chart...');
+
+      this.costChart = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+          labels: [],
+          datasets: [{
+            data: [],
+            backgroundColor: [
+              '#8b5cf6', // violet
+              '#ec4899', // pink
+              '#06b6d4', // cyan
+              '#f59e0b', // amber
+              '#10b981', // emerald
+              '#3b82f6', // blue
+              '#ef4444', // red
+              '#a855f7', // purple
+              '#14b8a6', // teal
+              '#f97316'  // orange
+            ],
+            borderColor: '#1e293b',
+            borderWidth: 2
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              display: true,
+              position: 'bottom',
+              labels: {
+                color: '#94a3b8',
+                padding: 12,
+                font: {
+                  size: 11
+                },
+                usePointStyle: true,
+                pointStyle: 'circle'
+              }
+            },
+            tooltip: {
+              backgroundColor: 'rgba(15, 23, 42, 0.9)',
+              titleColor: '#f1f5f9',
+              bodyColor: '#f1f5f9',
+              borderColor: '#8b5cf6',
+              borderWidth: 1,
+              padding: 12,
+              callbacks: {
+                label: function(context) {
+                  const label = context.label || '';
+                  const value = context.parsed || 0;
+                  const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                  const percentage = total > 0 ? ((value / total) * 100).toFixed(1) : 0;
+                  return `${label}: $${value.toFixed(4)} (${percentage}%)`;
+                }
+              }
+            }
+          }
+        }
+      });
+
+      console.log('[Charts] Cost breakdown chart initialized');
+    },
+
+    // Update Signal Throughput Chart (Phase 3)
+    updateSignalChart() {
+      if (!this.signalChart) return;
+
+      // Group signals by 5-minute buckets over the last hour
+      const now = new Date();
+      const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+
+      // Create 12 buckets (5-minute intervals for 1 hour)
+      const buckets = [];
+      const labels = [];
+
+      for (let i = 11; i >= 0; i--) {
+        const bucketEnd = new Date(now.getTime() - i * 5 * 60 * 1000);
+        const bucketStart = new Date(bucketEnd.getTime() - 5 * 60 * 1000);
+
+        // Count signals in this bucket
+        const count = this.signals.filter(signal => {
+          const created = new Date(signal.created);
+          return created >= bucketStart && created < bucketEnd;
+        }).length;
+
+        // Calculate signals per minute for this bucket
+        const signalsPerMin = count / 5;
+        buckets.push(signalsPerMin);
+
+        // Format label as HH:MM
+        const hours = bucketEnd.getHours().toString().padStart(2, '0');
+        const minutes = bucketEnd.getMinutes().toString().padStart(2, '0');
+        labels.push(`${hours}:${minutes}`);
+      }
+
+      // Update chart data
+      this.signalChart.data.labels = labels;
+      this.signalChart.data.datasets[0].data = buckets;
+      this.signalChart.update('none'); // 'none' for no animation on update
+    },
+
+    // Update Cost Breakdown Chart (Phase 3)
+    updateCostChart() {
+      if (!this.costChart) return;
+
+      // Aggregate costs by agent_id
+      const costsByAgent = {};
+
+      this.costs.forEach(cost => {
+        const agentId = cost.agent_id || 'unknown';
+        const amount = parseFloat(cost.amount || cost.cost || 0);
+
+        if (!costsByAgent[agentId]) {
+          costsByAgent[agentId] = 0;
+        }
+        costsByAgent[agentId] += amount;
+      });
+
+      // Convert to arrays and sort by cost (highest first)
+      const entries = Object.entries(costsByAgent).sort((a, b) => b[1] - a[1]);
+
+      if (entries.length === 0) {
+        // No data - show empty state
+        this.costChart.data.labels = ['No data'];
+        this.costChart.data.datasets[0].data = [1];
+        this.costChart.data.datasets[0].backgroundColor = ['#334155'];
+      } else {
+        const labels = entries.map(([agent, _]) => agent);
+        const data = entries.map(([_, cost]) => cost);
+
+        this.costChart.data.labels = labels;
+        this.costChart.data.datasets[0].data = data;
+      }
+
+      this.costChart.update('none'); // 'none' for no animation on update
+    },
+
     async updateCharts() {
       console.log('[Dashboard] Updating charts...');
-      // TODO: Phase 3
+      this.updateSignalChart();
+      this.updateCostChart();
     }
   }));
 });
