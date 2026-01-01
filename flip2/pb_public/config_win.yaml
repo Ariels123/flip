@@ -1,0 +1,19 @@
+flip2:
+  daemon:
+    pid_file: "./flip2d.pid"
+    max_concurrent_tasks: 1
+    poll_interval: "5s"
+  
+  security:
+    api_keys_enabled: true
+    api_key: "flip2_secret_key_123"
+
+  project:
+    name: "flip2"
+    root_dir: "."
+
+  backends:
+    Claud-win:
+      type: process
+      command: "claude"
+      args: []

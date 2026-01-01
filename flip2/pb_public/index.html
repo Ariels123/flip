@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FLIP2 Dashboard</title>
+
+  <!-- TailwindCSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Alpine.js -->
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1"></script>
+
+  <!-- PocketBase SDK -->
+  <script src="https://cdn.jsdelivr.net/npm/pocketbase@0.21.3/dist/pocketbase.umd.js"></script>
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <!-- Custom CSS -->
+  <link rel="stylesheet" href="/css/dashboard.css">
+
+  <!-- Dashboard JavaScript -->
+  <script src="/js/dashboard.js"></script>
+</head>
+<body class="bg-slate-900 text-slate-100" x-data="dashboard">
+  <!-- Header -->
+  <header class="bg-slate-800 border-b border-slate-700 px-6 py-4">
+    <div class="flex items-center justify-between">
+      <div class="flex items-center gap-4">
+        <h1 class="text-2xl font-bold">FLIP2 Dashboard</h1>
+        <div class="flex items-center gap-2">
+          <div
+            class="w-3 h-3 rounded-full"
+            :class="connected ? 'bg-emerald-500' : 'bg-red-500'"
+            x-show="true"
+          ></div>
+          <span
+            class="text-sm"
+            :class="connected ? 'text-emerald-400' : 'text-red-400'"
+            x-text="connected ? 'Live' : 'Disconnected'"
+          ></span>
+        </div>
+      </div>
+      <div class="text-sm text-slate-400">
+        Last update: <span x-text="lastUpdate"></span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="container mx-auto px-6 py-8">
+    <!-- Stats Cards (Top Row) -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+      <!-- Agents Card -->
+      <div class="bg-slate-800 rounded-lg p-6 border border-slate-700">
+        <div class="text-slate-400 text-sm mb-2">Agents</div>
+        <div class="text-3xl font-bold mb-1" x-text="stats.agentsOnline"></div>
+        <div class="text-slate-500 text-xs">online</div>
+      </div>
+
+      <!-- Signals Card -->
+      <div class="bg-slate-800 rounded-lg p-6 border border-slate-700">
+        <div class="text-slate-400 text-sm mb-2">Signals</div>
+        <div class="text-3xl font-bold mb-1" x-text="stats.signalsPerMin"></div>
+        <div class="text-slate-500 text-xs">per min (avg)</div>
+      </div>
+
+      <!-- Tasks Card -->
+      <div class="bg-slate-800 rounded-lg p-6 border border-slate-700">
+        <div class="text-slate-400 text-sm mb-2">Tasks</div>
+        <div class="text-3xl font-bold mb-1" x-text="stats.activeTasks"></div>
+        <div class="text-slate-500 text-xs">active</div>
+      </div>
+
+      <!-- Costs Card -->
+      <div class="bg-slate-800 rounded-lg p-6 border border-slate-700">
+        <div class="text-slate-400 text-sm mb-2">Costs</div>
+        <div class="text-3xl font-bold mb-1">$<span x-text="stats.costToday.toFixed(2)"></span></div>
+        <div class="text-slate-500 text-xs">today</div>
+      </div>
+    </div>
+
+    <!-- Agent Activity & Signal Throughput -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+      <!-- Agent Activity Panel -->
+      <div class="bg-slate-800 rounded-lg p-6 border border-slate-700">
+        <h2 class="text-lg font-semibold mb-4">Agent Activity</h2>
+        <div class="space-y-3">
+          <template x-if="agents.length === 0">
+            <div class="text-slate-500 text-sm">No agents registered</div>
+          </template>
+          <template x-for="agent in agents" :key="agent.id">
+            <div class="flex items-center justify-between py-2 border-b border-slate-700 last:border-0">
+              <div class="flex items-center gap-3">
+                <div
+                  class="w-2 h-2 rounded-full"
+                  :class="agent.status === 'online' ? 'bg-emerald-500' : 'bg-red-500'"
+                ></div>
+                <span class="font-medium" x-text="agent.agent_id"></span>
+              </div>
+              <div class="text-sm text-slate-400" x-text="agent.backend_type"></div>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <!-- Signal Throughput Chart Placeholder -->
+      <div class="bg-slate-800 rounded-lg p-6 border border-slate-700">
+        <h2 class="text-lg font-semibold mb-4">Signal Throughput (1h)</h2>
+        <div class="flex items-center justify-center h-48 text-slate-500">
+          Chart will be implemented in Phase 3
+        </div>
+      </div>
+    </div>
+
+    <!-- Recent Signals -->
+    <div class="bg-slate-800 rounded-lg p-6 border border-slate-700 mb-8">
+      <h2 class="text-lg font-semibold mb-4">Recent Signals (last 10)</h2>
+      <div class="space-y-2">
+        <template x-if="signals.length === 0">
+          <div class="text-slate-500 text-sm">No signals yet</div>
+        </template>
+        <template x-for="signal in signals.slice(0, 10)" :key="signal.id">
+          <div class="flex items-center justify-between py-3 border-b border-slate-700 last:border-0">
+            <div class="flex-1">
+              <div class="flex items-center gap-2 mb-1">
+                <span class="font-medium text-violet-400" x-text="signal.from_agent"></span>
+                <span class="text-slate-500">→</span>
+                <span class="font-medium text-pink-400" x-text="signal.to_agent"></span>
+              </div>
+              <div class="text-sm text-slate-400" x-text="truncateContent(signal.content)"></div>
+            </div>
+            <div class="text-xs text-slate-500 ml-4" x-text="timeAgo(signal.created)"></div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- Cost Breakdown & System Health -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <!-- Cost Breakdown Chart Placeholder -->
+      <div class="bg-slate-800 rounded-lg p-6 border border-slate-700">
+        <h2 class="text-lg font-semibold mb-4">Cost Breakdown</h2>
+        <div class="flex items-center justify-center h-48 text-slate-500">
+          Chart will be implemented in Phase 3
+        </div>
+      </div>
+
+      <!-- System Health Placeholder -->
+      <div class="bg-slate-800 rounded-lg p-6 border border-slate-700">
+        <h2 class="text-lg font-semibold mb-4">System Health</h2>
+        <div class="space-y-4">
+          <div>
+            <div class="text-sm text-slate-400 mb-1">Database Size</div>
+            <div class="text-slate-300">Metrics coming in Phase 4</div>
+          </div>
+          <div>
+            <div class="text-sm text-slate-400 mb-1">Memory Usage</div>
+            <div class="text-slate-300">Metrics coming in Phase 4</div>
+          </div>
+          <div>
+            <div class="text-sm text-slate-400 mb-1">Uptime</div>
+            <div class="text-slate-300">Metrics coming in Phase 4</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Footer -->
+  <footer class="bg-slate-800 border-t border-slate-700 px-6 py-4 mt-8">
+    <div class="text-center text-sm text-slate-500">
+      FLIP2 Monitoring Dashboard v1.0 - Phase 1 (Foundation)
+    </div>
+  </footer>
+</body>
+</html>

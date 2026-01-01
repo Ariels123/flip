@@ -1,0 +1,30 @@
+flip2:
+  daemon:
+    pid_file: C:\flip2\v1\flip2d.pid
+    log_file: C:\flip2\v1\flip2d.log
+    log_level: debug
+
+  pocketbase:
+    host: 0.0.0.0
+    port: 8090
+    data_dir: C:\flip2\v1\pb_data
+    # This daemon acts as a node in the distributed mesh
+
+  backends:
+    claude:
+      command: claude
+      args: ["-p", "--dangerously-skip-permissions", "--output-format", "text"]
+      timeout: 300s
+      type: process
+
+  sync:
+    enabled: true
+    # The 'Hub' (Mac Laptop) we are creating a parallel connection to.
+    peer_url: http://192.168.1.53:8091
+    api_key: flip2_secret_key_123
+    interval: 30s
+    mode: satellite
+
+  security:
+    api_keys_enabled: true
+    api_key: flip2_win_key_456
