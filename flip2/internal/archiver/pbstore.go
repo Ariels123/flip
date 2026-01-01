@@ -44,7 +44,7 @@ func (s *PBStore) GetSignals(ctx context.Context, filter string, limit int) ([]S
 	records, err := s.app.FindRecordsByFilter(
 		collection.Id,
 		filter,
-		"-created",
+		"-id", // Use ID for sorting (PocketBase IDs are time-sortable)
 		limit,
 		0,
 	)

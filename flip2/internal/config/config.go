@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -20,6 +21,7 @@ type Config struct {
 		Security   SecurityConfig           `yaml:"security"`
 		Sync       SyncConfig               `yaml:"sync"`
 		Archiver   ArchiverConfig           `yaml:"archiver"`
+		CommMonitor CommMonitorConfig       `yaml:"commmonitor"`
 	} `yaml:"flip2"`
 }
 
@@ -115,6 +117,14 @@ type ArchiverConfig struct {
 	ArchivePath         string        `yaml:"archive_path"`
 }
 
+// CommMonitorConfig configures the communication monitor
+type CommMonitorConfig struct {
+	Enabled         bool              `yaml:"enabled"`
+	Threshold       float64           `yaml:"threshold"`
+	ValidAgents     []string          `yaml:"valid_agents"`
+	TypoCorrections map[string]string `yaml:"typo_corrections"`
+}
+
 // LoadConfig loads configuration from a YAML file
 func LoadConfig(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
@@ -144,5 +154,43 @@ func LoadConfig(path string) (*Config, error) {
 		config.Flip2.Sync.NodeID = hostname
 	}
 
+	// CommMonitor defaults
+	// Note: Threshold gets a default, but ValidAgents and TypoCorrections
+	// must be explicitly configured in config.yaml to respect user intent
+	if config.Flip2.CommMonitor.Threshold == 0 {
+		config.Flip2.CommMonitor.Threshold = 0.75
+	}
+
+	// Validate CommMonitor configuration
+	if err := validateCommMonitorConfig(&config.Flip2.CommMonitor); err != nil {
+		return nil, fmt.Errorf("invalid commmonitor config: %w", err)
+	}
+
 	return &config, nil
+}
+
+// validateCommMonitorConfig ensures typo corrections don't create infinite loops
+func validateCommMonitorConfig(cfg *CommMonitorConfig) error {
+	if !cfg.Enabled || len(cfg.TypoCorrections) == 0 {
+		return nil // Nothing to validate
+	}
+
+	// Build valid agents map for O(1) lookup
+	validAgents := make(map[string]bool, len(cfg.ValidAgents))
+	for _, agent := range cfg.ValidAgents {
+		validAgents[strings.ToLower(agent)] = true
+	}
+
+	// Validate each correction target exists in ValidAgents
+	for typo, correction := range cfg.TypoCorrections {
+		correctionLower := strings.ToLower(correction)
+		if !validAgents[correctionLower] {
+			return fmt.Errorf(
+				"typo correction '%s' -> '%s' is invalid: target '%s' is not in valid_agents list (this would cause infinite correction loops)",
+				typo, correction, correction,
+			)
+		}
+	}
+
+	return nil
 }

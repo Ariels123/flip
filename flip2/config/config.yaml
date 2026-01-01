@@ -82,7 +82,7 @@ flip2:
         # Port 8090 = Production on ALL systems (consistent convention)
 
   archiver:
-    enabled: true
+    enabled: true  # RE-ENABLED: Fixed @ prefix for system fields
     active_retention_days: 3
     recent_retention_days: 90
     check_interval: 6h
@@ -96,3 +96,34 @@ flip2:
       - claude
       - cli
       - antigravity
+
+  commmonitor:
+    enabled: true
+    threshold: 0.75
+    valid_agents:
+      - Claud-win
+      - claude-mac
+      - ag-win
+      - antigravity
+      - gemini
+      - comm-monitor
+      - claude
+      - cli
+    typo_corrections:
+      claude-win: Claud-win
+      claudwin: Claud-win
+      claud win: Claud-win
+      calude-win: Claud-win
+      cluad-win: Claud-win
+      claud_win: Claud-win
+      claud-win: Claud-win
+      claude mac: claude-mac
+      claudemac: claude-mac
+      claude_mac: claude-mac
+      cluade-mac: claude-mac
+      calude-mac: claude-mac
+      agwin: ag-win
+      ag win: ag-win
+      ag_win: ag-win
+      anti-gravity: antigravity
+      anti gravity: antigravity

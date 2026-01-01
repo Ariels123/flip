@@ -15,59 +15,19 @@ import (
 	"github.com/pocketbase/pocketbase/core"
 )
 
-// ValidAgents is the authoritative list of known agent IDs
-// Note: Claud-win uses Capital C per Windows sync (SYNC-STATUS-1766055837)
-var ValidAgents = map[string]bool{
-	"Claud-win":    true,
-	"claude-mac":   true,
-	"ag-win":       true,
-	"antigravity":  true,
-	"gemini":       true,
-	"comm-monitor": true,
-	"claude":       true,
-	"cli":          true,
-}
-
-// TypoCorrections maps common typos to correct agent IDs
-// Note: Claud-win uses Capital C per Windows sync (SYNC-STATUS-1766055837)
-var TypoCorrections = map[string]string{
-	"claude-win": "Claud-win",
-	"claudwin":   "Claud-win",
-	"claud win":  "Claud-win",
-	"calude-win": "Claud-win",
-	"cluad-win":  "Claud-win",
-	"claud_win":  "Claud-win",
-	"claud-win":  "Claud-win",
-
-	"claude mac":  "claude-mac",
-	"claudemac":   "claude-mac",
-	"claude_mac":  "claude-mac",
-	"cluade-mac":  "claude-mac",
-	"calude-mac":  "claude-mac",
-
-	"agwin":       "ag-win",
-	"ag win":      "ag-win",
-	"ag_win":      "ag-win",
-
-	"anti-gravity": "antigravity",
-	"anti gravity": "antigravity",
-}
-
 // Config holds monitor configuration
 type Config struct {
-	Threshold    float64       // Fuzzy match threshold (0.0-1.0)
-	Enabled      bool          // Enable/disable monitor
-	UseHooks     bool          // Use event hooks instead of polling (recommended)
-	PollInterval time.Duration // DEPRECATED: Only used if UseHooks=false
+	Threshold       float64           // Fuzzy match threshold (0.0-1.0)
+	Enabled         bool              // Enable/disable monitor
+	ValidAgents     []string          // List of valid agent IDs (from config)
+	TypoCorrections map[string]string // Typo correction map (from config)
 }
 
 // DefaultConfig returns sensible defaults
 func DefaultConfig() Config {
 	return Config{
-		Threshold:    0.75,
-		Enabled:      true,
-		UseHooks:     true,                // Event-driven by default (no polling)
-		PollInterval: 10 * time.Second,   // DEPRECATED: Only for backward compat
+		Threshold: 0.75,
+		Enabled:   true,
 	}
 }
 
@@ -81,10 +41,17 @@ type Monitor struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
+	// Agent validation (from config, converted to maps for fast lookup)
+	validAgents     map[string]bool
+	typoCorrections map[string]string
+
 	// Stats
 	mu              sync.RWMutex
 	signalCount     int
 	correctionCount int
+	errorCount      int
+	lastError       error
+	lastErrorTime   time.Time
 }
 
 // New creates a new communication monitor
@@ -95,29 +62,37 @@ func New(pb *pocketbase.PocketBase, config Config, logger *slog.Logger) *Monitor
 		logger = slog.Default()
 	}
 
+	// Convert ValidAgents array to map for fast lookup
+	validAgents := make(map[string]bool, len(config.ValidAgents))
+	for _, agent := range config.ValidAgents {
+		validAgents[strings.ToLower(agent)] = true
+	}
+
+	// Use typo corrections from config (already a map)
+	typoCorrections := config.TypoCorrections
+	if typoCorrections == nil {
+		typoCorrections = make(map[string]string)
+	}
+
 	return &Monitor{
-		pb:     pb,
-		config: config,
-		logger: logger.WithGroup("commmonitor"),
-		ctx:    ctx,
-		cancel: cancel,
+		pb:              pb,
+		config:          config,
+		logger:          logger.WithGroup("commmonitor"),
+		ctx:             ctx,
+		cancel:          cancel,
+		validAgents:     validAgents,
+		typoCorrections: typoCorrections,
 	}
 }
 
 // RegisterHooks registers event hooks for real-time signal monitoring
-// This is the recommended approach (UseHooks=true) - event-driven, no polling
 func (m *Monitor) RegisterHooks() {
 	if !m.config.Enabled {
 		m.logger.Info("Communication monitor disabled")
 		return
 	}
 
-	if !m.config.UseHooks {
-		m.logger.Warn("Hook-based monitoring disabled, falling back to polling (deprecated)")
-		return
-	}
-
-	m.logger.Info("Registering communication monitor hooks (event-driven)",
+	m.logger.Info("Registering communication monitor hooks",
 		"threshold", m.config.Threshold,
 	)
 
@@ -133,27 +108,17 @@ func (m *Monitor) RegisterHooks() {
 		return nil
 	})
 
-	m.logger.Info("Communication monitor hooks registered (real-time corrections enabled)")
+	m.logger.Info("Communication monitor hooks registered")
 }
 
-// Start begins the monitoring service
-// If UseHooks=true, this does nothing (hooks are registered separately via RegisterHooks)
-// If UseHooks=false, this starts the deprecated polling loop
+// Start is a no-op since monitoring is entirely event-driven via RegisterHooks
 func (m *Monitor) Start() {
 	if !m.config.Enabled {
 		m.logger.Info("Communication monitor disabled")
 		return
 	}
 
-	if m.config.UseHooks {
-		m.logger.Info("Communication monitor using event hooks (no polling needed)")
-		return
-	}
-
-	// Deprecated polling mode
-	m.logger.Warn("Starting DEPRECATED polling mode - consider switching to UseHooks=true")
-	m.wg.Add(1)
-	go m.monitorLoop()
+	m.logger.Info("Communication monitor started (event-driven)")
 }
 
 // Stop gracefully shuts down the monitor
@@ -167,40 +132,6 @@ func (m *Monitor) Stop() {
 	)
 }
 
-// Stats returns current monitoring statistics
-func (m *Monitor) Stats() map[string]interface{} {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	return map[string]interface{}{
-		"signals_checked":   m.signalCount,
-		"corrections_made":  m.correctionCount,
-		"enabled":           m.config.Enabled,
-		"poll_interval":     m.config.PollInterval.String(),
-		"threshold":         m.config.Threshold,
-	}
-}
-
-// monitorLoop is the main monitoring loop
-func (m *Monitor) monitorLoop() {
-	defer m.wg.Done()
-
-	ticker := time.NewTicker(m.config.PollInterval)
-	defer ticker.Stop()
-
-	// Track corrected signal IDs to avoid re-processing
-	correctedIDs := make(map[string]bool)
-
-	for {
-		select {
-		case <-m.ctx.Done():
-			return
-		case <-ticker.C:
-			m.checkAndCorrectSignals(correctedIDs)
-		}
-	}
-}
-
 // checkAndCorrectSignal processes a single signal record for typo correction
 // Used by event hooks for real-time corrections
 func (m *Monitor) checkAndCorrectSignal(signal *core.Record) {
@@ -212,8 +143,8 @@ func (m *Monitor) checkAndCorrectSignal(signal *core.Record) {
 
 	// Check and correct from_agent
 	fromAgent := signal.GetString("from_agent")
-	if fromAgent != "" && !ValidAgents[strings.ToLower(fromAgent)] {
-		if corrected := m.fuzzyMatchAgent(fromAgent); corrected != "" {
+	if fromAgent != "" && !m.validAgents[strings.ToLower(fromAgent)] {
+		if corrected := m.fuzzyMatchAgent(fromAgent); corrected != "" && corrected != fromAgent {
 			m.logger.Info("Correcting from_agent",
 				"signal_id", signal.GetString("signal_id"),
 				"original", fromAgent,
@@ -230,10 +161,10 @@ func (m *Monitor) checkAndCorrectSignal(signal *core.Record) {
 	// Check and correct to_agent
 	toAgent := signal.GetString("to_agent")
 	toAgentLower := strings.ToLower(toAgent)
-	isValidTo := ValidAgents[toAgentLower]
+	isValidTo := m.validAgents[toAgentLower]
 	if toAgent != "" && !isValidTo {
 		corrected := m.fuzzyMatchAgent(toAgent)
-		if corrected != "" {
+		if corrected != "" && corrected != toAgent {
 			m.logger.Info("Correcting to_agent",
 				"signal_id", signal.GetString("signal_id"),
 				"original", toAgent,
@@ -251,139 +182,13 @@ func (m *Monitor) checkAndCorrectSignal(signal *core.Record) {
 	if needsSave {
 		if err := m.pb.Save(signal); err != nil {
 			m.logger.Error("Failed to save correction", "error", err, "signal_id", signal.Id)
+			m.mu.Lock()
+			m.errorCount++
+			m.lastError = err
+			m.lastErrorTime = time.Now()
+			m.mu.Unlock()
 		}
 	}
-}
-
-// checkAndCorrectSignals scans signals for invalid agent IDs and corrects them
-// DEPRECATED: Used only by polling mode (UseHooks=false)
-func (m *Monitor) checkAndCorrectSignals(correctedIDs map[string]bool) {
-	// Get signals with potentially invalid to_agent or from_agent
-	signals, err := m.getSignalsNeedingCorrection()
-	if err != nil {
-		m.logger.Error("Failed to fetch signals", "error", err)
-		return
-	}
-
-	if len(signals) == 0 {
-		return
-	}
-
-	correctedThisCycle := 0
-	checkedThisCycle := 0
-
-	for _, signal := range signals {
-		// Skip already corrected
-		if correctedIDs[signal.Id] {
-			continue
-		}
-
-		checkedThisCycle++
-
-		m.mu.Lock()
-		m.signalCount++
-		m.mu.Unlock()
-
-		needsSave := false
-
-		// Check and correct from_agent
-		fromAgent := signal.GetString("from_agent")
-		if fromAgent != "" && !ValidAgents[strings.ToLower(fromAgent)] {
-			if corrected := m.fuzzyMatchAgent(fromAgent); corrected != "" {
-				m.logger.Info("Correcting from_agent",
-					"signal_id", signal.GetString("signal_id"),
-					"original", fromAgent,
-					"corrected", corrected,
-				)
-				signal.Set("from_agent", corrected)
-				needsSave = true
-				m.mu.Lock()
-				m.correctionCount++
-				m.mu.Unlock()
-			}
-		}
-
-		// Check and correct to_agent
-		toAgent := signal.GetString("to_agent")
-		toAgentLower := strings.ToLower(toAgent)
-		isValidTo := ValidAgents[toAgentLower]
-		if toAgent != "" && !isValidTo {
-			corrected := m.fuzzyMatchAgent(toAgent)
-			m.logger.Info("Checking to_agent",
-				"signal_id", signal.GetString("signal_id"),
-				"to_agent", toAgent,
-				"to_agent_lower", toAgentLower,
-				"is_valid", isValidTo,
-				"corrected", corrected,
-			)
-			if corrected != "" {
-				m.logger.Info("Correcting to_agent",
-					"signal_id", signal.GetString("signal_id"),
-					"original", toAgent,
-					"corrected", corrected,
-				)
-				signal.Set("to_agent", corrected)
-				needsSave = true
-				m.mu.Lock()
-				m.correctionCount++
-				m.mu.Unlock()
-			}
-		}
-
-		// Save if corrections were made
-		if needsSave {
-			if err := m.pb.Save(signal); err != nil {
-				m.logger.Error("Failed to save correction", "error", err, "signal_id", signal.Id)
-			} else {
-				correctedIDs[signal.Id] = true
-				correctedThisCycle++
-			}
-		}
-	}
-
-	// Log stats if anything was checked or corrected
-	if checkedThisCycle > 0 || correctedThisCycle > 0 {
-		m.logger.Info("Cycle complete",
-			"checked", checkedThisCycle,
-			"corrected", correctedThisCycle,
-			"total_corrected", len(correctedIDs),
-		)
-	}
-}
-
-// getSignalsNeedingCorrection finds signals with invalid agent IDs
-func (m *Monitor) getSignalsNeedingCorrection() ([]*core.Record, error) {
-	// Get all signals and filter in Go (PocketBase filter syntax is limited)
-	return m.getAllSignalsForCheck()
-}
-
-// getAllSignalsForCheck gets a batch of signals to check (newest first)
-func (m *Monitor) getAllSignalsForCheck() ([]*core.Record, error) {
-	// Get recent signals - PocketBase accepts -id for descending by ID
-	// IDs in PocketBase are alphabetically sortable and newer ones come later
-	records, err := m.pb.FindRecordsByFilter(
-		"signals",
-		"",
-		"-id", // Sort by ID descending (newer signals have alphabetically later IDs)
-		100,
-		0,
-	)
-	return records, err
-}
-
-// getRecentSignals fetches recent signals from the database
-// FIXED: Removed dangerous FindAllRecords fallback that could load entire table into RAM
-func (m *Monitor) getRecentSignals(limit int) ([]*core.Record, error) {
-	// Sort by ID descending (newer signals have alphabetically later IDs in PocketBase)
-	records, err := m.pb.FindRecordsByFilter(
-		"signals",
-		"",           // match all
-		"-id",        // Sort by ID descending to get newest first
-		limit,
-		0,
-	)
-	// Fail fast - no fallback that loads entire table
-	return records, err
 }
 
 // fuzzyMatchAgent finds the closest matching valid agent ID
@@ -395,14 +200,14 @@ func (m *Monitor) fuzzyMatchAgent(agentID string) string {
 	agentLower := strings.ToLower(agentID)
 
 	// Check exact match (case-insensitive)
-	for valid := range ValidAgents {
+	for _, valid := range m.config.ValidAgents {
 		if agentLower == strings.ToLower(valid) {
 			return valid
 		}
 	}
 
 	// Check typo corrections
-	if corrected, ok := TypoCorrections[agentLower]; ok {
+	if corrected, ok := m.typoCorrections[agentLower]; ok {
 		return corrected
 	}
 
@@ -410,7 +215,7 @@ func (m *Monitor) fuzzyMatchAgent(agentID string) string {
 	bestMatch := ""
 	bestSimilarity := 0.0
 
-	for valid := range ValidAgents {
+	for _, valid := range m.config.ValidAgents {
 		similarity := m.calculateSimilarity(agentLower, strings.ToLower(valid))
 
 		if similarity > bestSimilarity && similarity >= m.config.Threshold {
@@ -442,6 +247,7 @@ func (m *Monitor) calculateSimilarity(s1, s2 string) float64 {
 }
 
 // levenshteinDistance calculates the edit distance between two strings
+// Optimized to use O(min(N,M)) memory instead of O(N*M) by using only two rows
 func levenshteinDistance(s1, s2 string) int {
 	if len(s1) == 0 {
 		return len(s2)
@@ -450,53 +256,56 @@ func levenshteinDistance(s1, s2 string) int {
 		return len(s1)
 	}
 
-	// Create matrix
-	matrix := make([][]int, len(s1)+1)
-	for i := range matrix {
-		matrix[i] = make([]int, len(s2)+1)
+	// Use two rows instead of full matrix to reduce memory allocation
+	v0 := make([]int, len(s2)+1)
+	v1 := make([]int, len(s2)+1)
+
+	// Initialize first row
+	for i := 0; i <= len(s2); i++ {
+		v0[i] = i
 	}
 
-	// Initialize first row and column
-	for i := 0; i <= len(s1); i++ {
-		matrix[i][0] = i
-	}
-	for j := 0; j <= len(s2); j++ {
-		matrix[0][j] = j
-	}
+	// Calculate each subsequent row
+	for i := 0; i < len(s1); i++ {
+		v1[0] = i + 1
 
-	// Fill matrix
-	for i := 1; i <= len(s1); i++ {
-		for j := 1; j <= len(s2); j++ {
+		for j := 0; j < len(s2); j++ {
 			cost := 1
-			if s1[i-1] == s2[j-1] {
+			if s1[i] == s2[j] {
 				cost = 0
 			}
 
-			matrix[i][j] = min(
-				matrix[i-1][j]+1,      // deletion
-				matrix[i][j-1]+1,      // insertion
-				matrix[i-1][j-1]+cost, // substitution
+			v1[j+1] = min(
+				v1[j]+1,      // insertion
+				v0[j+1]+1,    // deletion
+				v0[j]+cost,   // substitution
 			)
 		}
+
+		// Swap rows for next iteration
+		copy(v0, v1)
 	}
 
-	return matrix[len(s1)][len(s2)]
+	return v0[len(s2)]
 }
 
-// correctSignal updates a signal's agent ID field
-func (m *Monitor) correctSignal(signal *core.Record, field, corrected string) bool {
-	signal.Set(field, corrected)
+// Stats returns current monitoring statistics
+func (m *Monitor) Stats() map[string]interface{} {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 
-	if err := m.pb.Save(signal); err != nil {
-		m.logger.Error("Failed to correct signal",
-			"error", err,
-			"field", field,
-			"value", corrected,
-		)
-		return false
+	var lastErrorStr string
+	if m.lastError != nil {
+		lastErrorStr = m.lastError.Error()
 	}
 
-	return true
+	return map[string]interface{}{
+		"signals_checked":   m.signalCount,
+		"corrections_made":  m.correctionCount,
+		"error_count":       m.errorCount,
+		"last_error":        lastErrorStr,
+		"last_error_time":   m.lastErrorTime,
+	}
 }
 
 func max(a, b int) int {

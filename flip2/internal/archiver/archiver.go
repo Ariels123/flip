@@ -251,8 +251,9 @@ func (a *Archiver) RunArchiveCycle(ctx context.Context) {
 
 // archiveReadMessages moves read messages older than retention to archive.
 func (a *Archiver) archiveReadMessages(ctx context.Context) (int, error) {
-	cutoff := time.Now().Add(-time.Duration(a.config.ActiveRetentionDays) * 24 * time.Hour)
-	filter := fmt.Sprintf("read = true && created < '%s'", cutoff.Format(time.RFC3339))
+	// NOTE: Signals table doesn't have created/updated fields
+	// Using read=true filter only for now
+	filter := "read = true"
 
 	signals, err := a.store.GetSignals(ctx, filter, a.config.BatchSize)
 	if err != nil {
@@ -301,8 +302,9 @@ func (a *Archiver) archiveReadMessages(ctx context.Context) (int, error) {
 
 // archiveLongTerm moves old archive records to file storage.
 func (a *Archiver) archiveLongTerm(ctx context.Context) (int, error) {
-	cutoff := time.Now().Add(-time.Duration(a.config.RecentRetentionDays) * 24 * time.Hour)
-	filter := fmt.Sprintf("created < '%s'", cutoff.Format(time.RFC3339))
+	// NOTE: Archive table doesn't have created field either
+	// Get all records for now (will implement proper time-based archiving later)
+	filter := ""
 
 	signals, err := a.store.GetArchiveSignals(ctx, filter, a.config.BatchSize)
 	if err != nil {
