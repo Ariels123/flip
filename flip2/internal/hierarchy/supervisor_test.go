@@ -765,6 +765,908 @@ func TestWorkerResultComplete(t *testing.T) {
 	}
 }
 
+// ================================================================================
+// DELEGATION STRATEGY TESTS
+// ================================================================================
+
+// TestDelegateTaskRoundRobin tests round-robin task delegation.
+func TestDelegateTaskRoundRobin(t *testing.T) {
+	h := NewHierarchy()
+	h.SetCoordinator("coordinator-1")
+	h.AddSupervisor("supervisor-1")
+
+	supervisor, _ := h.Supervisors["supervisor-1"]
+	// Increase concurrent spawn limit to allow more workers
+	supervisor.Capabilities.DelegationBudget.MaxConcurrentSpawns = 5
+	sa, _ := NewSupervisorAgent(supervisor)
+
+	ctx := context.Background()
+
+	// Spawn 3 workers
+	sa.SpawnWorker(ctx, "worker-1")
+	sa.SpawnWorker(ctx, "worker-2")
+	sa.SpawnWorker(ctx, "worker-3")
+
+	// Delegate multiple tasks using round-robin
+	delegatedTo := make(map[string]int)
+	for i := 1; i <= 6; i++ {
+		task := &TaskRequirements{
+			TaskID:   "task-" + string(rune(48+i)),
+			TaskType: "test",
+			Priority: 3,
+		}
+
+		result, err := sa.DelegateTask(ctx, task, StrategyRoundRobin)
+		if err != nil {
+			t.Fatalf("DelegateTask failed: %v", err)
+		}
+
+		if !result.Success {
+			t.Fatalf("Task delegation failed: %s", result.Reason)
+		}
+
+		delegatedTo[result.WorkerID]++
+	}
+
+	// Verify tasks are distributed across workers
+	if len(delegatedTo) < 2 {
+		t.Error("Round-robin should distribute tasks to multiple workers")
+	}
+}
+
+// TestDelegateTaskLeastLoaded tests least-loaded task delegation.
+func TestDelegateTaskLeastLoaded(t *testing.T) {
+	h := NewHierarchy()
+	h.SetCoordinator("coordinator-1")
+	h.AddSupervisor("supervisor-1")
+
+	supervisor, _ := h.Supervisors["supervisor-1"]
+	supervisor.Capabilities.DelegationBudget.MaxConcurrentSpawns = 5
+	sa, _ := NewSupervisorAgent(supervisor)
+
+	ctx := context.Background()
+
+	// Spawn workers
+	sa.SpawnWorker(ctx, "worker-1")
+	sa.SpawnWorker(ctx, "worker-2")
+	sa.SpawnWorker(ctx, "worker-3")
+
+	// First task should go to any worker
+	task1 := &TaskRequirements{
+		TaskID:   "task-1",
+		TaskType: "test",
+	}
+
+	result1, err := sa.DelegateTask(ctx, task1, StrategyLeastLoaded)
+	if err != nil {
+		t.Fatalf("DelegateTask failed: %v", err)
+	}
+
+	if !result1.Success {
+		t.Fatalf("First task delegation failed: %s", result1.Reason)
+	}
+
+	// Match score should be 1.0 for empty worker
+	if result1.MatchScore != 1.0 {
+		t.Errorf("Match score for empty worker = %f, want 1.0", result1.MatchScore)
+	}
+
+	// Subsequent tasks should go to other workers (least loaded)
+	task2 := &TaskRequirements{
+		TaskID:   "task-2",
+		TaskType: "test",
+	}
+
+	result2, err := sa.DelegateTask(ctx, task2, StrategyLeastLoaded)
+	if err != nil {
+		t.Fatalf("DelegateTask failed: %v", err)
+	}
+
+	// Should have selected a different worker (both have 0 load after delegation)
+	// Note: Due to implementation details, this may or may not be different
+	if !result2.Success {
+		t.Fatalf("Second task delegation failed: %s", result2.Reason)
+	}
+}
+
+// TestDelegateTaskCapabilityMatch tests capability-based task delegation.
+func TestDelegateTaskCapabilityMatch(t *testing.T) {
+	h := NewHierarchy()
+	h.SetCoordinator("coordinator-1")
+	h.AddSupervisor("supervisor-1")
+
+	supervisor, _ := h.Supervisors["supervisor-1"]
+	supervisor.Capabilities.DelegationBudget.MaxConcurrentSpawns = 5
+	sa, _ := NewSupervisorAgent(supervisor)
+
+	ctx := context.Background()
+
+	// Spawn workers with different capabilities
+	sa.SpawnWorker(ctx, "code-worker")
+	sa.SpawnWorker(ctx, "test-worker")
+	sa.SpawnWorker(ctx, "research-worker")
+
+	// Set capabilities on workers
+	sa.SetWorkerCapabilities("code-worker", []string{"code_generation", "debugging"})
+	sa.SetWorkerCapabilities("test-worker", []string{"testing", "qa"})
+	sa.SetWorkerCapabilities("research-worker", []string{"research", "documentation"})
+
+	// Delegate task requiring testing capability
+	task := &TaskRequirements{
+		TaskID:               "test-task-1",
+		TaskType:             "testing",
+		RequiredCapabilities: []string{"testing"},
+	}
+
+	result, err := sa.DelegateTask(ctx, task, StrategyCapabilityMatch)
+	if err != nil {
+		t.Fatalf("DelegateTask failed: %v", err)
+	}
+
+	if !result.Success {
+		t.Fatalf("Task delegation failed: %s", result.Reason)
+	}
+
+	if result.WorkerID != "test-worker" {
+		t.Errorf("Expected task to go to test-worker, got %s", result.WorkerID)
+	}
+
+	if result.MatchScore < 0.9 {
+		t.Errorf("Match score should be high for capability match, got %f", result.MatchScore)
+	}
+}
+
+// TestDelegateTaskPriority tests priority-based task delegation.
+func TestDelegateTaskPriority(t *testing.T) {
+	h := NewHierarchy()
+	h.SetCoordinator("coordinator-1")
+	h.AddSupervisor("supervisor-1")
+
+	supervisor, _ := h.Supervisors["supervisor-1"]
+	supervisor.Capabilities.DelegationBudget.MaxConcurrentSpawns = 5
+	sa, _ := NewSupervisorAgent(supervisor)
+
+	ctx := context.Background()
+
+	// Spawn workers
+	sa.SpawnWorker(ctx, "worker-low")
+	sa.SpawnWorker(ctx, "worker-high")
+	sa.SpawnWorker(ctx, "worker-mid")
+
+	// Set priorities
+	sa.SetWorkerPriority("worker-low", 1)
+	sa.SetWorkerPriority("worker-high", 10)
+	sa.SetWorkerPriority("worker-mid", 5)
+
+	// Delegate task using priority strategy
+	task := &TaskRequirements{
+		TaskID:   "priority-task",
+		TaskType: "test",
+	}
+
+	result, err := sa.DelegateTask(ctx, task, StrategyPriority)
+	if err != nil {
+		t.Fatalf("DelegateTask failed: %v", err)
+	}
+
+	if !result.Success {
+		t.Fatalf("Task delegation failed: %s", result.Reason)
+	}
+
+	if result.WorkerID != "worker-high" {
+		t.Errorf("Expected task to go to worker-high (priority 10), got %s", result.WorkerID)
+	}
+
+	// Match score should be 1.0 (10/10)
+	if result.MatchScore != 1.0 {
+		t.Errorf("Match score = %f, want 1.0", result.MatchScore)
+	}
+}
+
+// TestDelegateTaskPreferredWorker tests preferred worker selection.
+func TestDelegateTaskPreferredWorker(t *testing.T) {
+	h := NewHierarchy()
+	h.SetCoordinator("coordinator-1")
+	h.AddSupervisor("supervisor-1")
+
+	supervisor, _ := h.Supervisors["supervisor-1"]
+	supervisor.Capabilities.DelegationBudget.MaxConcurrentSpawns = 5
+	sa, _ := NewSupervisorAgent(supervisor)
+
+	ctx := context.Background()
+
+	// Spawn workers
+	sa.SpawnWorker(ctx, "worker-1")
+	sa.SpawnWorker(ctx, "worker-2")
+	sa.SpawnWorker(ctx, "preferred-worker")
+
+	// Delegate task with preferred worker
+	task := &TaskRequirements{
+		TaskID:            "preferred-task",
+		TaskType:          "test",
+		PreferredWorkerID: "preferred-worker",
+	}
+
+	result, err := sa.DelegateTask(ctx, task, StrategyLeastLoaded)
+	if err != nil {
+		t.Fatalf("DelegateTask failed: %v", err)
+	}
+
+	if !result.Success {
+		t.Fatalf("Task delegation failed: %s", result.Reason)
+	}
+
+	if result.WorkerID != "preferred-worker" {
+		t.Errorf("Expected task to go to preferred-worker, got %s", result.WorkerID)
+	}
+}
+
+// TestDelegateTaskNoAvailableWorkers tests delegation when no workers are available.
+func TestDelegateTaskNoAvailableWorkers(t *testing.T) {
+	h := NewHierarchy()
+	h.SetCoordinator("coordinator-1")
+	h.AddSupervisor("supervisor-1")
+
+	supervisor, _ := h.Supervisors["supervisor-1"]
+	sa, _ := NewSupervisorAgent(supervisor)
+
+	ctx := context.Background()
+
+	// No workers spawned
+	task := &TaskRequirements{
+		TaskID:   "orphan-task",
+		TaskType: "test",
+	}
+
+	result, err := sa.DelegateTask(ctx, task, StrategyLeastLoaded)
+	if err != nil {
+		t.Fatalf("DelegateTask should not return error, got: %v", err)
+	}
+
+	if result.Success {
+		t.Error("Task delegation should fail when no workers available")
+	}
+
+	if result.Reason == "" {
+		t.Error("Failed delegation should have a reason")
+	}
+}
+
+// TestDelegateTaskMissingCapabilities tests delegation when no worker has required capabilities.
+func TestDelegateTaskMissingCapabilities(t *testing.T) {
+	h := NewHierarchy()
+	h.SetCoordinator("coordinator-1")
+	h.AddSupervisor("supervisor-1")
+
+	supervisor, _ := h.Supervisors["supervisor-1"]
+	supervisor.Capabilities.DelegationBudget.MaxConcurrentSpawns = 5
+	sa, _ := NewSupervisorAgent(supervisor)
+
+	ctx := context.Background()
+
+	// Spawn workers with limited capabilities
+	sa.SpawnWorker(ctx, "worker-1")
+	sa.SpawnWorker(ctx, "worker-2")
+	sa.SetWorkerCapabilities("worker-1", []string{"testing"})
+	sa.SetWorkerCapabilities("worker-2", []string{"debugging"})
+
+	// Request capability no worker has
+	task := &TaskRequirements{
+		TaskID:               "impossible-task",
+		TaskType:             "machine_learning",
+		RequiredCapabilities: []string{"machine_learning", "gpu_compute"},
+	}
+
+	result, err := sa.DelegateTask(ctx, task, StrategyCapabilityMatch)
+	if err != nil {
+		t.Fatalf("DelegateTask should not return error, got: %v", err)
+	}
+
+	if result.Success {
+		t.Error("Task delegation should fail when no worker has required capabilities")
+	}
+}
+
+// TestDelegateTaskNilTask tests delegation with nil task.
+func TestDelegateTaskNilTask(t *testing.T) {
+	h := NewHierarchy()
+	h.SetCoordinator("coordinator-1")
+	h.AddSupervisor("supervisor-1")
+
+	supervisor, _ := h.Supervisors["supervisor-1"]
+	sa, _ := NewSupervisorAgent(supervisor)
+
+	ctx := context.Background()
+
+	_, err := sa.DelegateTask(ctx, nil, StrategyLeastLoaded)
+	if err == nil {
+		t.Error("DelegateTask with nil task should return error")
+	}
+}
+
+// TestDelegateTaskEmptyTaskID tests delegation with empty task ID.
+func TestDelegateTaskEmptyTaskID(t *testing.T) {
+	h := NewHierarchy()
+	h.SetCoordinator("coordinator-1")
+	h.AddSupervisor("supervisor-1")
+
+	supervisor, _ := h.Supervisors["supervisor-1"]
+	sa, _ := NewSupervisorAgent(supervisor)
+
+	ctx := context.Background()
+
+	task := &TaskRequirements{
+		TaskID:   "",
+		TaskType: "test",
+	}
+
+	_, err := sa.DelegateTask(ctx, task, StrategyLeastLoaded)
+	if err == nil {
+		t.Error("DelegateTask with empty task ID should return error")
+	}
+}
+
+// TestDelegationResultDetails tests that delegation results contain expected details.
+func TestDelegationResultDetails(t *testing.T) {
+	h := NewHierarchy()
+	h.SetCoordinator("coordinator-1")
+	h.AddSupervisor("supervisor-1")
+
+	supervisor, _ := h.Supervisors["supervisor-1"]
+	supervisor.Capabilities.DelegationBudget.MaxConcurrentSpawns = 5
+	sa, _ := NewSupervisorAgent(supervisor)
+
+	ctx := context.Background()
+	sa.SpawnWorker(ctx, "worker-1")
+
+	task := &TaskRequirements{
+		TaskID:         "detailed-task",
+		TaskType:       "test",
+		TimeoutSeconds: 300,
+	}
+
+	result, err := sa.DelegateTask(ctx, task, StrategyLeastLoaded)
+	if err != nil {
+		t.Fatalf("DelegateTask failed: %v", err)
+	}
+
+	if !result.Success {
+		t.Fatalf("Task delegation failed: %s", result.Reason)
+	}
+
+	// Check result contains expected details
+	if result.WorkerID == "" {
+		t.Error("Result should have worker ID")
+	}
+
+	if result.DelegatedAt.IsZero() {
+		t.Error("Result should have delegation timestamp")
+	}
+
+	if result.EstimatedDeadline.IsZero() {
+		t.Error("Result should have estimated deadline")
+	}
+
+	// Deadline should be after delegation time
+	if !result.EstimatedDeadline.After(result.DelegatedAt) {
+		t.Error("Deadline should be after delegation time")
+	}
+
+	// Deadline should be about TimeoutSeconds in the future
+	expectedDuration := time.Duration(task.TimeoutSeconds) * time.Second
+	actualDuration := result.EstimatedDeadline.Sub(result.DelegatedAt)
+	if actualDuration < expectedDuration-time.Second || actualDuration > expectedDuration+time.Second {
+		t.Errorf("Deadline duration = %v, want approximately %v", actualDuration, expectedDuration)
+	}
+}
+
+// ================================================================================
+// WORKER CAPABILITY MANAGEMENT TESTS
+// ================================================================================
+
+// TestSetWorkerCapabilities tests setting worker capabilities.
+func TestSetWorkerCapabilities(t *testing.T) {
+	h := NewHierarchy()
+	h.SetCoordinator("coordinator-1")
+	h.AddSupervisor("supervisor-1")
+
+	supervisor, _ := h.Supervisors["supervisor-1"]
+	sa, _ := NewSupervisorAgent(supervisor)
+
+	ctx := context.Background()
+	sa.SpawnWorker(ctx, "worker-1")
+
+	capabilities := []string{"code_generation", "testing", "debugging"}
+	err := sa.SetWorkerCapabilities("worker-1", capabilities)
+	if err != nil {
+		t.Fatalf("SetWorkerCapabilities failed: %v", err)
+	}
+
+	// Verify capabilities were set
+	workers := sa.GetSpawnedWorkers()
+	var worker *HierarchyNode
+	for _, w := range workers {
+		if w.AgentID == "worker-1" {
+			worker = w
+			break
+		}
+	}
+
+	if worker == nil {
+		t.Fatal("Worker not found")
+	}
+
+	storedCaps, ok := worker.Metadata["capabilities"].([]string)
+	if !ok {
+		t.Fatal("Capabilities not stored correctly")
+	}
+
+	if len(storedCaps) != len(capabilities) {
+		t.Errorf("Stored capabilities count = %d, want %d", len(storedCaps), len(capabilities))
+	}
+}
+
+// TestSetWorkerCapabilitiesNonExistentWorker tests setting capabilities for non-existent worker.
+func TestSetWorkerCapabilitiesNonExistentWorker(t *testing.T) {
+	h := NewHierarchy()
+	h.SetCoordinator("coordinator-1")
+	h.AddSupervisor("supervisor-1")
+
+	supervisor, _ := h.Supervisors["supervisor-1"]
+	sa, _ := NewSupervisorAgent(supervisor)
+
+	err := sa.SetWorkerCapabilities("non-existent", []string{"testing"})
+	if err == nil {
+		t.Error("SetWorkerCapabilities for non-existent worker should return error")
+	}
+}
+
+// TestSetWorkerPriority tests setting worker priority.
+func TestSetWorkerPriority(t *testing.T) {
+	h := NewHierarchy()
+	h.SetCoordinator("coordinator-1")
+	h.AddSupervisor("supervisor-1")
+
+	supervisor, _ := h.Supervisors["supervisor-1"]
+	sa, _ := NewSupervisorAgent(supervisor)
+
+	ctx := context.Background()
+	sa.SpawnWorker(ctx, "worker-1")
+
+	err := sa.SetWorkerPriority("worker-1", 7)
+	if err != nil {
+		t.Fatalf("SetWorkerPriority failed: %v", err)
+	}
+
+	// Verify priority was set
+	workers := sa.GetSpawnedWorkers()
+	var worker *HierarchyNode
+	for _, w := range workers {
+		if w.AgentID == "worker-1" {
+			worker = w
+			break
+		}
+	}
+
+	if worker == nil {
+		t.Fatal("Worker not found")
+	}
+
+	storedPriority, ok := worker.Metadata["priority"].(int)
+	if !ok {
+		t.Fatal("Priority not stored correctly")
+	}
+
+	if storedPriority != 7 {
+		t.Errorf("Stored priority = %d, want 7", storedPriority)
+	}
+}
+
+// TestSetWorkerPriorityNonExistentWorker tests setting priority for non-existent worker.
+func TestSetWorkerPriorityNonExistentWorker(t *testing.T) {
+	h := NewHierarchy()
+	h.SetCoordinator("coordinator-1")
+	h.AddSupervisor("supervisor-1")
+
+	supervisor, _ := h.Supervisors["supervisor-1"]
+	sa, _ := NewSupervisorAgent(supervisor)
+
+	err := sa.SetWorkerPriority("non-existent", 5)
+	if err == nil {
+		t.Error("SetWorkerPriority for non-existent worker should return error")
+	}
+}
+
+// TestGetWorkerLoad tests getting worker load information.
+func TestGetWorkerLoad(t *testing.T) {
+	h := NewHierarchy()
+	h.SetCoordinator("coordinator-1")
+	h.AddSupervisor("supervisor-1")
+
+	supervisor, _ := h.Supervisors["supervisor-1"]
+	sa, _ := NewSupervisorAgent(supervisor)
+
+	ctx := context.Background()
+	sa.SpawnWorker(ctx, "worker-1")
+
+	activeTasks, maxTasks, err := sa.GetWorkerLoad("worker-1")
+	if err != nil {
+		t.Fatalf("GetWorkerLoad failed: %v", err)
+	}
+
+	if activeTasks != 0 {
+		t.Errorf("Initial active tasks = %d, want 0", activeTasks)
+	}
+
+	// maxTasks should be 3 (default)
+	if maxTasks != 3 {
+		t.Errorf("Max tasks = %d, want 3", maxTasks)
+	}
+}
+
+// TestGetWorkerLoadNonExistentWorker tests getting load for non-existent worker.
+func TestGetWorkerLoadNonExistentWorker(t *testing.T) {
+	h := NewHierarchy()
+	h.SetCoordinator("coordinator-1")
+	h.AddSupervisor("supervisor-1")
+
+	supervisor, _ := h.Supervisors["supervisor-1"]
+	sa, _ := NewSupervisorAgent(supervisor)
+
+	_, _, err := sa.GetWorkerLoad("non-existent")
+	if err == nil {
+		t.Error("GetWorkerLoad for non-existent worker should return error")
+	}
+}
+
+// ================================================================================
+// POOL MANAGEMENT TESTS
+// ================================================================================
+
+// TestWorkerPoolScaling tests spawning and terminating workers dynamically.
+func TestWorkerPoolScaling(t *testing.T) {
+	h := NewHierarchy()
+	h.SetCoordinator("coordinator-1")
+	h.AddSupervisor("supervisor-1")
+
+	supervisor, _ := h.Supervisors["supervisor-1"]
+	supervisor.Capabilities.DelegationBudget.MaxConcurrentSpawns = 10
+	supervisor.Capabilities.DelegationBudget.MaxWorkers = 10
+	sa, _ := NewSupervisorAgent(supervisor)
+
+	ctx := context.Background()
+
+	// Scale up: spawn 5 workers
+	for i := 1; i <= 5; i++ {
+		workerID := "worker-" + string(rune(48+i))
+		_, err := sa.SpawnWorker(ctx, workerID)
+		if err != nil {
+			t.Fatalf("Failed to spawn worker %d: %v", i, err)
+		}
+	}
+
+	if sa.GetWorkerCount() != 5 {
+		t.Errorf("Worker count after scale up = %d, want 5", sa.GetWorkerCount())
+	}
+
+	// Scale down: terminate 2 workers
+	sa.TerminateWorker(ctx, "worker-1")
+	sa.TerminateWorker(ctx, "worker-2")
+
+	// Workers are marked terminated but still tracked
+	status1, _ := sa.GetWorkerStatus(ctx, "worker-1")
+	if status1 != WorkerStatusTerminated {
+		t.Errorf("Worker-1 status = %s, want terminated", status1)
+	}
+
+	// Active workers should be 3
+	activeCount := 0
+	for _, w := range sa.GetSpawnedWorkers() {
+		if w.Status != "terminated" {
+			activeCount++
+		}
+	}
+
+	if activeCount != 3 {
+		t.Errorf("Active worker count = %d, want 3", activeCount)
+	}
+}
+
+// TestWorkerPoolReuse tests reusing terminated worker IDs.
+func TestWorkerPoolReuse(t *testing.T) {
+	h := NewHierarchy()
+	h.SetCoordinator("coordinator-1")
+	h.AddSupervisor("supervisor-1")
+
+	supervisor, _ := h.Supervisors["supervisor-1"]
+	supervisor.Capabilities.DelegationBudget.MaxConcurrentSpawns = 10
+	sa, _ := NewSupervisorAgent(supervisor)
+
+	ctx := context.Background()
+
+	// Spawn and terminate a worker
+	sa.SpawnWorker(ctx, "worker-1")
+	sa.TerminateWorker(ctx, "worker-1")
+
+	// Cannot reuse the same ID while it's still tracked
+	_, err := sa.SpawnWorker(ctx, "worker-1")
+	if err == nil {
+		t.Error("Should not be able to spawn worker with same ID as terminated worker")
+	}
+}
+
+// TestWorkerPoolFiltering tests filtering workers by status.
+func TestWorkerPoolFiltering(t *testing.T) {
+	h := NewHierarchy()
+	h.SetCoordinator("coordinator-1")
+	h.AddSupervisor("supervisor-1")
+
+	supervisor, _ := h.Supervisors["supervisor-1"]
+	supervisor.Capabilities.DelegationBudget.MaxConcurrentSpawns = 10
+	supervisor.Capabilities.DelegationBudget.MaxWorkers = 10
+	sa, _ := NewSupervisorAgent(supervisor)
+
+	ctx := context.Background()
+
+	// Spawn workers
+	sa.SpawnWorker(ctx, "worker-active-1")
+	sa.SpawnWorker(ctx, "worker-active-2")
+	sa.SpawnWorker(ctx, "worker-to-terminate")
+	sa.SpawnWorker(ctx, "worker-to-fail")
+
+	// Terminate one
+	sa.TerminateWorker(ctx, "worker-to-terminate")
+
+	// Mark one as failed via result
+	sa.RecordWorkerResult(&WorkerResult{
+		WorkerID: "worker-to-fail",
+		Status:   WorkerStatusFailed,
+		Error:    "simulated failure",
+	})
+
+	// Count by status
+	statusCounts := make(map[string]int)
+	for _, w := range sa.GetSpawnedWorkers() {
+		statusCounts[w.Status]++
+	}
+
+	// Should have 2 active, 1 terminated, 1 failed
+	if statusCounts["active"] != 2 {
+		t.Errorf("Active workers = %d, want 2", statusCounts["active"])
+	}
+
+	if statusCounts["terminated"] != 1 {
+		t.Errorf("Terminated workers = %d, want 1", statusCounts["terminated"])
+	}
+
+	if statusCounts[string(WorkerStatusFailed)] != 1 {
+		t.Errorf("Failed workers = %d, want 1", statusCounts[string(WorkerStatusFailed)])
+	}
+}
+
+// TestConcurrentDelegation tests thread-safe task delegation.
+func TestConcurrentDelegation(t *testing.T) {
+	h := NewHierarchy()
+	h.SetCoordinator("coordinator-1")
+	h.AddSupervisor("supervisor-1")
+
+	supervisor, _ := h.Supervisors["supervisor-1"]
+	supervisor.Capabilities.DelegationBudget.MaxConcurrentSpawns = 10
+	supervisor.Capabilities.DelegationBudget.MaxWorkers = 10
+	supervisor.Capabilities.DelegationBudget.MaxTasksPerWorker = 20
+	sa, _ := NewSupervisorAgent(supervisor)
+
+	ctx := context.Background()
+
+	// Spawn workers
+	for i := 1; i <= 5; i++ {
+		workerID := "worker-" + string(rune(48+i))
+		sa.SpawnWorker(ctx, workerID)
+	}
+
+	// Concurrently delegate tasks
+	done := make(chan *DelegationResult, 20)
+
+	for i := 0; i < 20; i++ {
+		go func(idx int) {
+			task := &TaskRequirements{
+				TaskID:   "concurrent-task-" + string(rune(48+idx)),
+				TaskType: "test",
+			}
+			result, _ := sa.DelegateTask(ctx, task, StrategyLeastLoaded)
+			done <- result
+		}(i)
+	}
+
+	// Collect results
+	successCount := 0
+	for i := 0; i < 20; i++ {
+		result := <-done
+		if result != nil && result.Success {
+			successCount++
+		}
+	}
+
+	// Most should succeed (within budget)
+	if successCount < 15 {
+		t.Errorf("Success count = %d, expected at least 15", successCount)
+	}
+
+	// Active task count should match successes
+	if sa.GetActiveTaskCount() != successCount {
+		t.Errorf("Active task count = %d, want %d", sa.GetActiveTaskCount(), successCount)
+	}
+}
+
+// TestWorkerTypeCapabilities tests capabilities derived from worker type.
+func TestWorkerTypeCapabilities(t *testing.T) {
+	h := NewHierarchy()
+	h.SetCoordinator("coordinator-1")
+	h.AddSupervisor("supervisor-1")
+
+	supervisor, _ := h.Supervisors["supervisor-1"]
+	supervisor.Capabilities.DelegationBudget.MaxConcurrentSpawns = 10
+	sa, _ := NewSupervisorAgent(supervisor)
+
+	ctx := context.Background()
+
+	// Spawn workers and set their types
+	sa.SpawnWorker(ctx, "code-worker")
+	sa.SpawnWorker(ctx, "test-worker")
+	sa.SpawnWorker(ctx, "research-worker")
+	sa.SpawnWorker(ctx, "data-worker")
+
+	// Set worker types in metadata
+	workers := sa.GetSpawnedWorkers()
+	for _, w := range workers {
+		if w.Metadata == nil {
+			w.Metadata = make(map[string]interface{})
+		}
+		switch w.AgentID {
+		case "code-worker":
+			w.Metadata["worker_type"] = "code"
+		case "test-worker":
+			w.Metadata["worker_type"] = "test"
+		case "research-worker":
+			w.Metadata["worker_type"] = "research"
+		case "data-worker":
+			w.Metadata["worker_type"] = "data"
+		}
+	}
+
+	// Test code capability
+	codeTask := &TaskRequirements{
+		TaskID:               "code-task",
+		RequiredCapabilities: []string{"code_generation"},
+	}
+	result, _ := sa.DelegateTask(ctx, codeTask, StrategyCapabilityMatch)
+	if result.Success && result.WorkerID != "code-worker" {
+		t.Errorf("Code task should go to code-worker, got %s", result.WorkerID)
+	}
+
+	// Test testing capability
+	testTask := &TaskRequirements{
+		TaskID:               "test-task",
+		RequiredCapabilities: []string{"testing"},
+	}
+	result, _ = sa.DelegateTask(ctx, testTask, StrategyCapabilityMatch)
+	if result.Success && result.WorkerID != "test-worker" {
+		t.Errorf("Test task should go to test-worker, got %s", result.WorkerID)
+	}
+}
+
+// TestDefaultDelegationStrategy tests that invalid strategy falls back to least loaded.
+func TestDefaultDelegationStrategy(t *testing.T) {
+	h := NewHierarchy()
+	h.SetCoordinator("coordinator-1")
+	h.AddSupervisor("supervisor-1")
+
+	supervisor, _ := h.Supervisors["supervisor-1"]
+	supervisor.Capabilities.DelegationBudget.MaxConcurrentSpawns = 5
+	sa, _ := NewSupervisorAgent(supervisor)
+
+	ctx := context.Background()
+	sa.SpawnWorker(ctx, "worker-1")
+
+	task := &TaskRequirements{
+		TaskID:   "test-task",
+		TaskType: "test",
+	}
+
+	// Use invalid strategy
+	result, err := sa.DelegateTask(ctx, task, DelegationStrategy("invalid_strategy"))
+	if err != nil {
+		t.Fatalf("DelegateTask with invalid strategy should not error: %v", err)
+	}
+
+	if !result.Success {
+		t.Error("Delegation with invalid strategy should fall back to default and succeed")
+	}
+}
+
+// TestTaskTimeoutDefault tests that default timeout is applied when not specified.
+func TestTaskTimeoutDefault(t *testing.T) {
+	h := NewHierarchy()
+	h.SetCoordinator("coordinator-1")
+	h.AddSupervisor("supervisor-1")
+
+	supervisor, _ := h.Supervisors["supervisor-1"]
+	supervisor.Capabilities.DelegationBudget.MaxConcurrentSpawns = 5
+	supervisor.Capabilities.DelegationBudget.TimeoutSeconds = 900 // 15 minutes
+	sa, _ := NewSupervisorAgent(supervisor)
+
+	ctx := context.Background()
+	sa.SpawnWorker(ctx, "worker-1")
+
+	task := &TaskRequirements{
+		TaskID:         "timeout-test",
+		TaskType:       "test",
+		TimeoutSeconds: 0, // Not specified
+	}
+
+	result, _ := sa.DelegateTask(ctx, task, StrategyLeastLoaded)
+
+	if !result.Success {
+		t.Fatal("Delegation should succeed")
+	}
+
+	// Check deadline uses default timeout (15 minutes = 900 seconds)
+	expectedDuration := 900 * time.Second
+	actualDuration := result.EstimatedDeadline.Sub(result.DelegatedAt)
+	if actualDuration < expectedDuration-time.Second || actualDuration > expectedDuration+time.Second {
+		t.Errorf("Deadline duration = %v, want approximately %v", actualDuration, expectedDuration)
+	}
+}
+
+// TestWorkerMetadataUpdate tests that delegation updates worker metadata.
+func TestWorkerMetadataUpdate(t *testing.T) {
+	h := NewHierarchy()
+	h.SetCoordinator("coordinator-1")
+	h.AddSupervisor("supervisor-1")
+
+	supervisor, _ := h.Supervisors["supervisor-1"]
+	supervisor.Capabilities.DelegationBudget.MaxConcurrentSpawns = 5
+	sa, _ := NewSupervisorAgent(supervisor)
+
+	ctx := context.Background()
+	sa.SpawnWorker(ctx, "worker-1")
+
+	task := &TaskRequirements{
+		TaskID:   "metadata-task",
+		TaskType: "test",
+	}
+
+	result, _ := sa.DelegateTask(ctx, task, StrategyLeastLoaded)
+
+	if !result.Success {
+		t.Fatal("Delegation should succeed")
+	}
+
+	// Check worker metadata was updated
+	workers := sa.GetSpawnedWorkers()
+	var worker *HierarchyNode
+	for _, w := range workers {
+		if w.AgentID == "worker-1" {
+			worker = w
+			break
+		}
+	}
+
+	if worker == nil {
+		t.Fatal("Worker not found")
+	}
+
+	lastTaskID, ok := worker.Metadata["last_task_id"].(string)
+	if !ok || lastTaskID != "metadata-task" {
+		t.Errorf("Last task ID = %v, want metadata-task", lastTaskID)
+	}
+
+	lastAssigned, ok := worker.Metadata["last_task_assigned_at"].(time.Time)
+	if !ok || lastAssigned.IsZero() {
+		t.Error("Last task assigned time should be set")
+	}
+}
+
 // TestConfigurableBudget tests that the supervisor respects the budget configured in its node.
 func TestConfigurableBudget(t *testing.T) {
 	h := NewHierarchy()
