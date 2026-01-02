@@ -9,6 +9,7 @@ document.addEventListener('alpine:init', () => {
     signals: [],
     costs: [],
     alerts: [],
+    codeReviews: [],
     stats: {
       agentsOnline: 0,
       signalsPerMin: 0,
@@ -46,13 +47,13 @@ document.addEventListener('alpine:init', () => {
     // Connect to PocketBase
     async connectPocketBase() {
       try {
-        console.log('[PocketBase] Connecting to http://localhost:8090...');
-        this.pb = new PocketBase('http://localhost:8090');
+        console.log('[PocketBase] Connecting to https://localhost:8090...');
+        this.pb = new PocketBase('https://localhost:8090');
 
         // Check if admin is authenticated
         if (!this.pb.authStore.isValid) {
           console.warn('[PocketBase] Not authenticated. Admin login required.');
-          console.log('[PocketBase] Please log in at: http://localhost:8090/_/');
+          console.log('[PocketBase] Please log in at: https://localhost:8090/_/');
           // For Phase 1, we won't redirect - just log the warning
           // In later phases, we can add proper authentication flow
         } else {
@@ -84,13 +85,11 @@ document.addEventListener('alpine:init', () => {
     async loadInitialData() {
       console.log('[Dashboard] Loading initial data...');
       try {
-        await Promise.all([
-          this.loadAgents(),
-          this.loadRecentSignals(),
-          this.loadCosts(),
-          this.loadHealthMetrics(),
-          this.loadAlerts()
-        ]);
+        // Load all data from public endpoint (bypasses auth)
+        await this.loadAllData();
+
+        // Load health metrics separately
+        await this.loadHealthMetrics();
 
         // Update stats after all data is loaded
         await this.updateStats();
@@ -210,6 +209,28 @@ document.addEventListener('alpine:init', () => {
         console.error('[Alerts] Subscription error:', err);
       });
 
+      // Subscribe to code_reviews collection
+      this.pb.collection('code_reviews').subscribe('*', (e) => {
+        console.log('[CodeReviews] Real-time event:', e.action, e.record);
+
+        if (e.action === 'create') {
+          this.codeReviews.unshift(e.record);
+          console.log('[CodeReviews] New review started:', e.record.review_type);
+        } else if (e.action === 'update') {
+          const index = this.codeReviews.findIndex(r => r.id === e.record.id);
+          if (index !== -1) {
+            this.codeReviews[index] = e.record;
+            console.log('[CodeReviews] Review updated:', e.record.id, e.record.status);
+          }
+        }
+        // Keep only the last 10 reviews
+        if (this.codeReviews.length > 10) {
+          this.codeReviews = this.codeReviews.slice(0, 10);
+        }
+      }, (err) => {
+        console.error('[CodeReviews] Subscription error:', err);
+      });
+
       console.log('[Dashboard] Real-time subscriptions active');
     },
 
@@ -254,59 +275,43 @@ document.addEventListener('alpine:init', () => {
       return `${Math.floor(seconds / 86400)}d ago`;
     },
 
-    // Load agents from PocketBase (Phase 2)
-    async loadAgents() {
-      console.log('[Dashboard] Loading agents...');
+    // Load all data from public endpoint (bypasses auth)
+    async loadAllData() {
+      console.log('[Dashboard] Loading all data from public endpoint...');
       try {
-        const records = await this.pb.collection('agents').getFullList({
-          sort: '-created'
-        });
-        this.agents = records;
-        console.log(`[Agents] Loaded ${records.length} agents`);
+        const response = await fetch('https://localhost:8090/dashboard/data');
+        const data = await response.json();
+
+        this.agents = data.agents || [];
+        this.signals = data.signals || [];
+        this.costs = data.costs || [];
+        this.alerts = data.alerts || [];
+        this.codeReviews = data.code_reviews || [];
+
+        console.log(`[Dashboard] Loaded: ${this.agents.length} agents, ${this.signals.length} signals, ${this.costs.length} costs, ${this.alerts.length} alerts, ${this.codeReviews.length} reviews`);
       } catch (error) {
-        console.error('[Agents] Error loading:', error);
-        // Set empty array if collection doesn't exist
+        console.error('[Dashboard] Error loading data:', error);
         this.agents = [];
-      }
-    },
-
-    // Load recent signals from PocketBase (Phase 2)
-    async loadRecentSignals() {
-      console.log('[Dashboard] Loading recent signals...');
-      try {
-        const records = await this.pb.collection('signals').getFullList({
-          sort: '-created',
-          limit: 50
-        });
-        this.signals = records;
-        console.log(`[Signals] Loaded ${records.length} signals`);
-      } catch (error) {
-        console.error('[Signals] Error loading:', error);
-        // Set empty array if collection doesn't exist
         this.signals = [];
+        this.costs = [];
+        this.alerts = [];
+        this.codeReviews = [];
       }
     },
 
-    // Load today's costs from PocketBase (Phase 2)
-    async loadCosts() {
-      console.log('[Dashboard] Loading costs...');
-      try {
-        // Get costs from today (midnight to now)
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const todayStr = today.toISOString();
+    // Load agents from PocketBase (Phase 2) - DEPRECATED, use loadAllData
+    async loadAgents() {
+      // No-op, data loaded via loadAllData
+    },
 
-        const records = await this.pb.collection('costs').getFullList({
-          filter: `created >= "${todayStr}"`,
-          sort: '-created'
-        });
-        this.costs = records;
-        console.log(`[Costs] Loaded ${records.length} cost records for today`);
-      } catch (error) {
-        console.error('[Costs] Error loading:', error);
-        // Set empty array if collection doesn't exist
-        this.costs = [];
-      }
+    // Load recent signals from PocketBase (Phase 2) - DEPRECATED, use loadAllData
+    async loadRecentSignals() {
+      // No-op, data loaded via loadAllData
+    },
+
+    // Load today's costs from PocketBase (Phase 2) - DEPRECATED, use loadAllData
+    async loadCosts() {
+      // No-op, data loaded via loadAllData
     },
 
     // Calculate and update dashboard stats (Phase 2)
@@ -583,21 +588,9 @@ document.addEventListener('alpine:init', () => {
       this.updateCostChart();
     },
 
-    // Load active alerts
+    // Load active alerts - DEPRECATED, use loadAllData
     async loadAlerts() {
-      console.log('[Dashboard] Loading active alerts...');
-      try {
-        const records = await this.pb.collection('alerts').getFullList({
-          filter: 'state = "firing"',
-          sort: '-fired_at',
-          $autoCancel: false
-        });
-        this.alerts = records;
-        console.log(`[Alerts] Loaded ${records.length} active alerts`);
-      } catch (error) {
-        console.error('[Alerts] Error loading:', error);
-        this.alerts = [];
-      }
+      // No-op, data loaded via loadAllData
     },
 
     // Acknowledge (resolve) an alert
@@ -611,6 +604,38 @@ document.addEventListener('alpine:init', () => {
         console.log('[Alerts] Alert acknowledged:', alertId);
       } catch (error) {
         console.error('[Alerts] Error acknowledging alert:', error);
+      }
+    },
+
+    // Load code reviews - DEPRECATED, use loadAllData
+    async loadCodeReviews() {
+      // No-op, data loaded via loadAllData
+    },
+
+    // Trigger on-demand code review
+    async triggerCodeReview() {
+      console.log('[CodeReviews] Triggering manual code review...');
+      try {
+        const response = await fetch('https://localhost:8090/api/code-review/trigger', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            review_type: 'on_demand',
+            reviewer: 'gemini',
+            scope: 'uncommitted'
+          })
+        });
+
+        if (response.ok) {
+          const result = await response.json();
+          console.log('[CodeReviews] Review triggered:', result);
+          // Refresh code reviews list
+          await this.loadCodeReviews();
+        } else {
+          console.error('[CodeReviews] Failed to trigger review:', response.statusText);
+        }
+      } catch (error) {
+        console.error('[CodeReviews] Failed to trigger review:', error);
       }
     },
 

@@ -1,0 +1,55 @@
+{
+  "analysis": "Based on the provided statistics, here is the analysis of the FLIP2 system health:\n\n### 1. Are the detected anomalies concerning?\n**Yes, critical.**\n*   **100% Unread Rate:** The fact that `unread_signals` (376) equals `total_signals` (376) means **zero** processing is occurring. The system is effectively a \"write-only\" buffer right now.\n*   **Stalled Pipeline:** The \"No signal activity in the last 24 hours\" combined with the backlog confirms the consumer side is completely offline or disconnected.\n\n### 2. Signal Distribution Patterns\n*   **Naming Fragmentation (Root Cause Candidate):** The `by_to_agent` field shows severe inconsistency in addressing the Windows agent: `Claud-win` (53), `claud-win` (180), `claude-win` (134), and `claudwin` (4). If the receiving agent is only listening for *one* of these names (e.g., `claude-win`), it will never \"see\" or consume the majority of these messages.\n*   **One-Way Traffic:** The flow is almost exclusively **Mac → Windows**. `claude-mac` and `comm-monitor` account for ~95% of the source traffic, targeting the Windows variants.\n*   **Noise vs. Action:** 96% of signals are type `message` (362), with very few actual `task` (7) signals. The system is clogged with chatter rather than actionable work.\n\n### 3. Recommendations\n1.  **Standardize Identity:** Immediately enforce a strict naming convention in the configuration. Consolidate all variations (`claud-win`, `Claud-win`, etc.) to a single canonical ID (e.g., `claude-win`).\n2.  **Restart Windows Consumer:** The Windows agent is likely down or misconfigured. Verify its `config.yaml` to ensure it subscribes to the correct canonical ID.\n3.  **Silence `comm-monitor`:** Check the `comm-monitor` logic. It has generated 168 signals that no one is reading. Consider adding a \"back-off\" strategy or disabling it until the consumer is healthy.\n\n### 4. Early Warning Signs\n*   **Identity Drift:** The four variations of the Windows agent name suggest manual configuration errors or hardcoded strings in different parts of the codebase (`flip2` vs `flip2d` vs scripts).\n*   **Alert Fatigue:** The 4 `alert` signals are buried under 362 `message` signals. In a real outage, critical alerts are being drowned out by general message noise.",
+  "analyzer": "gemini",
+  "latency_ms": 20371,
+  "model": "gemini-2.5-flash",
+  "prompt": "You are analyzing FLIP2 multi-agent system statistics.\n\nCurrent statistics:\n{\n  \"anomalies\": [\n    {\n      \"message\": \"High number of unread signals: 376 (threshold: 100)\",\n      \"severity\": \"warning\",\n      \"type\": \"high_unread_count\",\n      \"value\": 376\n    },\n    {\n      \"message\": \"No signal activity in the last 24 hours\",\n      \"severity\": \"warning\",\n      \"type\": \"no_recent_activity\",\n      \"value\": 0\n    }\n  ],\n  \"anomaly_count\": 2,\n  \"by_from_agent\": {\n    \"AG-win\": 6,\n    \"Claud-win\": 2,\n    \"ag-win\": 8,\n    \"claude-mac\": 189,\n    \"claude-win\": 2,\n    \"comm-monitor\": 168,\n    \"mac\": 1\n  },\n  \"by_signal_type\": {\n    \"alert\": 4,\n    \"message\": 362,\n    \"ping\": 1,\n    \"status\": 2,\n    \"task\": 7\n  },\n  \"by_to_agent\": {\n    \"ALL\": 1,\n    \"Claud-win\": 53,\n    \"ag-win\": 2,\n    \"claud-win\": 180,\n    \"claude-mac\": 1,\n    \"claude-win\": 134,\n    \"claudwin\": 4,\n    \"windows\": 1\n  },\n  \"node_id\": \"mac\",\n  \"timestamp\": \"2026-01-01T06:00:00\",\n  \"total_signals\": 376,\n  \"unread_signals\": 376\n}\n\nAnomalies detected:\n{\n  \"anomalies\": [\n    {\n      \"message\": \"High number of unread signals: 376 (threshold: 100)\",\n      \"severity\": \"warning\",\n      \"type\": \"high_unread_count\",\n      \"value\": 376\n    },\n    {\n      \"message\": \"No signal activity in the last 24 hours\",\n      \"severity\": \"warning\",\n      \"type\": \"no_recent_activity\",\n      \"value\": 0\n    }\n  ],\n  \"node_id\": \"mac\",\n  \"statistics\": {\n    \"anomalies\": [\n      {\n        \"message\": \"High number of unread signals: 376 (threshold: 100)\",\n        \"severity\": \"warning\",\n        \"type\": \"high_unread_count\",\n        \"value\": 376\n      },\n      {\n        \"message\": \"No signal activity in the last 24 hours\",\n        \"severity\": \"warning\",\n        \"type\": \"no_recent_activity\",\n        \"value\": 0\n      }\n    ],\n    \"anomaly_count\": 2,\n    \"by_from_agent\": {\n      \"AG-win\": 6,\n      \"Claud-win\": 2,\n      \"ag-win\": 8,\n      \"claude-mac\": 189,\n      \"claude-win\": 2,\n      \"comm-monitor\": 168,\n      \"mac\": 1\n    },\n    \"by_signal_type\": {\n      \"alert\": 4,\n      \"message\": 362,\n      \"ping\": 1,\n      \"status\": 2,\n      \"task\": 7\n    },\n    \"by_to_agent\": {\n      \"ALL\": 1,\n      \"Claud-win\": 53,\n      \"ag-win\": 2,\n      \"claud-win\": 180,\n      \"claude-mac\": 1,\n      \"claude-win\": 134,\n      \"claudwin\": 4,\n      \"windows\": 1\n    },\n    \"node_id\": \"mac\",\n    \"timestamp\": \"2026-01-01T06:00:00\",\n    \"total_signals\": 376,\n    \"unread_signals\": 376\n  },\n  \"timestamp\": \"2026-01-01T06:00:00\"\n}\n\nPlease analyze these statistics and anomalies:\n1. Are the detected anomalies concerning?\n2. What patterns do you see in the signal distribution?\n3. Any recommendations for system health?\n4. Are there any early warning signs we should monitor?\n\nKeep your response concise (under 500 words) and actionable.",
+  "statistics": {
+    "anomalies": [
+      {
+        "message": "High number of unread signals: 376 (threshold: 100)",
+        "severity": "warning",
+        "type": "high_unread_count",
+        "value": 376
+      },
+      {
+        "message": "No signal activity in the last 24 hours",
+        "severity": "warning",
+        "type": "no_recent_activity",
+        "value": 0
+      }
+    ],
+    "anomaly_count": 2,
+    "by_from_agent": {
+      "AG-win": 6,
+      "Claud-win": 2,
+      "ag-win": 8,
+      "claude-mac": 189,
+      "claude-win": 2,
+      "comm-monitor": 168,
+      "mac": 1
+    },
+    "by_signal_type": {
+      "alert": 4,
+      "message": 362,
+      "ping": 1,
+      "status": 2,
+      "task": 7
+    },
+    "by_to_agent": {
+      "ALL": 1,
+      "Claud-win": 53,
+      "ag-win": 2,
+      "claud-win": 180,
+      "claude-mac": 1,
+      "claude-win": 134,
+      "claudwin": 4,
+      "windows": 1
+    },
+    "node_id": "mac",
+    "timestamp": "2026-01-01T06:00:00",
+    "total_signals": 376,
+    "unread_signals": 376
+  },
+  "timestamp": "2026-01-01T06:00:20"
+}

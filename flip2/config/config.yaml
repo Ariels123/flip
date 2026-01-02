@@ -2,14 +2,14 @@ flip2:
   daemon:
     pid_file: /tmp/flip2d.pid
     log_file: /tmp/flip2d.log
-    log_level: info
+    log_level: debug
 
   pocketbase:
     host: 0.0.0.0
     port: 8090
     data_dir: ./pb_data
     tls:
-      enabled: true
+      enabled: false
       cert_file: ./certs/flip2.crt
       key_file: ./certs/flip2.key
 

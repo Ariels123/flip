@@ -1,0 +1,154 @@
+# FLIP Routing Rules Configuration
+# Task ID: RTR-003
+# Version: 1.0
+# Created: 2026-01-01
+#
+# This YAML file defines routing rules that determine which AI model should
+# handle different types of tasks based on task type and complexity.
+#
+# Rules are evaluated in priority order (highest first) and the first matching
+# rule determines the target model.
+#
+# Complexity scoring: Overall complexity is calculated as a weighted average
+# of technical complexity (35%), context requirements (20%), risk level (30%),
+# and reversibility (15%), resulting in a score between 1.0 and 5.0.
+
+version: "1.0"
+description: "FLIP intelligent task routing rules for multi-model task execution"
+default_model: "sonnet"
+
+rules:
+  # ============================================================================
+  # CRITICAL / HIGH-RISK TASKS -> OPUS (Always)
+  # ============================================================================
+  # These tasks are non-negotiable - only the highest capability model should
+  # attempt them. No fallback if Opus is unavailable.
+
+  - task_type: security
+    model: opus
+    priority: 900
+    description: "Security tasks always use Opus for thorough analysis"
+
+  - task_type: architecture
+    model: opus
+    priority: 900
+    description: "Architecture decisions always use Opus"
+
+  - min_risk_level: 5
+    model: opus
+    priority: 1000
+    description: "Critical-risk tasks (level 5) always use Opus"
+
+  # ============================================================================
+  # COMPLEX TASKS -> OPUS
+  # ============================================================================
+  # High complexity scores indicate tasks requiring the best reasoning.
+
+  - min_complexity: 4.0
+    model: opus
+    priority: 800
+    description: "Highly complex tasks (score >= 4.0) use Opus"
+
+  # ============================================================================
+  # VISUAL / BROWSER TASKS -> ANTIGRAVITY
+  # ============================================================================
+  # Tasks requiring visual understanding or browser automation need human-in-loop.
+
+  - task_type: visual
+    model: antigravity
+    priority: 700
+    description: "Visual/browser tasks use Antigravity (human-in-loop)"
+
+  # ============================================================================
+  # MODERATE COMPLEXITY -> SONNET (Standard workhorse)
+  # ============================================================================
+  # Sonnet provides excellent cost/quality ratio for typical implementation work.
+
+  - complexity: "2.5-4.0"
+    model: sonnet
+    priority: 600
+    description: "Moderate complexity (2.5-4.0) uses Sonnet"
+
+  - task_type: code_generation
+    model: sonnet
+    priority: 500
+    description: "Code generation defaults to Sonnet"
+
+  - task_type: code_review
+    model: sonnet
+    priority: 500
+    description: "Code review defaults to Sonnet"
+
+  - task_type: debugging
+    model: sonnet
+    priority: 500
+    description: "Debugging defaults to Sonnet"
+
+  - task_type: deployment
+    model: sonnet
+    priority: 500
+    description: "Deployment and DevOps defaults to Sonnet"
+
+  - task_type: pipeline
+    model: sonnet
+    priority: 500
+    description: "Pipeline orchestration defaults to Sonnet"
+
+  # ============================================================================
+  # BULK / RESEARCH TASKS -> GEMINI (Cost-effective)
+  # ============================================================================
+  # Gemini excels at bulk processing and research at minimal cost.
+
+  - task_type: research
+    model: gemini
+    priority: 400
+    description: "Research tasks use Gemini (cost-effective for large volumes)"
+
+  - task_type: data_processing
+    model: gemini
+    priority: 400
+    description: "Data processing uses Gemini (bulk efficiency)"
+
+  # ============================================================================
+  # SIMPLE TASKS -> HAIKU (Efficient for straightforward work)
+  # ============================================================================
+  # Simple tasks don't need advanced reasoning; save cost with Haiku.
+
+  - complexity: "1.0-2.5"
+    model: haiku
+    priority: 300
+    description: "Simple tasks (complexity < 2.5) use Haiku"
+
+  - task_type: testing
+    model: haiku
+    priority: 300
+    description: "Testing defaults to Haiku"
+
+  - task_type: documentation
+    model: haiku
+    priority: 300
+    description: "Documentation defaults to Haiku"
+
+  - task_type: refactoring
+    model: haiku
+    priority: 300
+    description: "Refactoring defaults to Haiku"
+
+  - task_type: configuration
+    model: haiku
+    priority: 300
+    description: "Configuration defaults to Haiku"
+
+  - task_type: communication
+    model: haiku
+    priority: 300
+    description: "Communication defaults to Haiku"
+
+  # ============================================================================
+  # FALLBACK DEFAULT
+  # ============================================================================
+  # If no other rule matches, use Sonnet as the default workhorse.
+
+  - model: sonnet
+    priority: 0
+    description: "Default fallback to Sonnet"

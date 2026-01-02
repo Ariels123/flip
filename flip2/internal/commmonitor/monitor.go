@@ -21,15 +21,47 @@ type Config struct {
 	Enabled         bool              // Enable/disable monitor
 	ValidAgents     []string          // List of valid agent IDs (from config)
 	TypoCorrections map[string]string // Typo correction map (from config)
+	PollInterval    time.Duration     // Poll interval for non-event monitoring
 }
 
 // DefaultConfig returns sensible defaults
 func DefaultConfig() Config {
 	return Config{
-		Threshold: 0.75,
-		Enabled:   true,
+		Threshold:    0.75,
+		Enabled:      true,
+		PollInterval: 30 * time.Second,
 	}
 }
+
+// Global agent data used for initialization and testing
+var (
+	// ValidAgents defines the set of all known valid agent IDs
+	ValidAgents = map[string]bool{
+		"Claud-win":    true,
+		"claude-mac":   true,
+		"ag-win":       true,
+		"antigravity":  true,
+		"gemini":       true,
+		"comm-monitor": true,
+		"claude":       true,
+		"cli":          true,
+	}
+
+	// TypoCorrections maps common typos to valid agent IDs
+	TypoCorrections = map[string]string{
+		"claude-win":   "Claud-win",
+		"claudwin":     "Claud-win",
+		"claud win":    "Claud-win",
+		"calude-win":   "Claud-win",
+		"claud-win":    "Claud-win",
+		"claude mac":   "claude-mac",
+		"claudemac":    "claude-mac",
+		"agwin":        "ag-win",
+		"ag win":       "ag-win",
+		"anti-gravity": "antigravity",
+		"anti gravity": "antigravity",
+	}
+)
 
 // Monitor runs the communication monitoring service
 type Monitor struct {
@@ -46,12 +78,18 @@ type Monitor struct {
 	typoCorrections map[string]string
 
 	// Stats
-	mu              sync.RWMutex
-	signalCount     int
-	correctionCount int
-	errorCount      int
-	lastError       error
-	lastErrorTime   time.Time
+	mu                 sync.RWMutex
+	signalCount        int
+	correctionCount    int
+	errorCount         int
+	detectionFailures  int // Signals with invalid agents that couldn't be corrected
+	validationErrors   int // Signals with malformed data
+	fuzzyMatchAttempts int // Total fuzzy match attempts
+	fuzzyMatchSuccess  int // Successful fuzzy matches
+	saveErrors         int // Failed save operations
+	lastError          error
+	lastErrorTime      time.Time
+	errorsByType       map[string]int // Count errors by type
 }
 
 // New creates a new communication monitor
@@ -82,6 +120,7 @@ func New(pb *pocketbase.PocketBase, config Config, logger *slog.Logger) *Monitor
 		cancel:          cancel,
 		validAgents:     validAgents,
 		typoCorrections: typoCorrections,
+		errorsByType:    make(map[string]int),
 	}
 }
 
@@ -139,12 +178,20 @@ func (m *Monitor) checkAndCorrectSignal(signal *core.Record) {
 	m.signalCount++
 	m.mu.Unlock()
 
+	// Validate signal data
+	if !m.validateSignal(signal) {
+		m.recordError("validation", nil)
+		return
+	}
+
 	needsSave := false
+	detectionFailed := false
 
 	// Check and correct from_agent
 	fromAgent := signal.GetString("from_agent")
 	if fromAgent != "" && !m.validAgents[strings.ToLower(fromAgent)] {
-		if corrected := m.fuzzyMatchAgent(fromAgent); corrected != "" && corrected != fromAgent {
+		corrected, matched := m.fuzzyMatchAgentWithStats(fromAgent)
+		if matched && corrected != fromAgent {
 			m.logger.Info("Correcting from_agent",
 				"signal_id", signal.GetString("signal_id"),
 				"original", fromAgent,
@@ -155,6 +202,13 @@ func (m *Monitor) checkAndCorrectSignal(signal *core.Record) {
 			m.mu.Lock()
 			m.correctionCount++
 			m.mu.Unlock()
+		} else if !matched {
+			// Detection failure: invalid agent couldn't be corrected
+			m.logger.Warn("Could not correct invalid from_agent",
+				"signal_id", signal.GetString("signal_id"),
+				"agent", fromAgent,
+			)
+			detectionFailed = true
 		}
 	}
 
@@ -163,8 +217,8 @@ func (m *Monitor) checkAndCorrectSignal(signal *core.Record) {
 	toAgentLower := strings.ToLower(toAgent)
 	isValidTo := m.validAgents[toAgentLower]
 	if toAgent != "" && !isValidTo {
-		corrected := m.fuzzyMatchAgent(toAgent)
-		if corrected != "" && corrected != toAgent {
+		corrected, matched := m.fuzzyMatchAgentWithStats(toAgent)
+		if matched && corrected != toAgent {
 			m.logger.Info("Correcting to_agent",
 				"signal_id", signal.GetString("signal_id"),
 				"original", toAgent,
@@ -175,19 +229,94 @@ func (m *Monitor) checkAndCorrectSignal(signal *core.Record) {
 			m.mu.Lock()
 			m.correctionCount++
 			m.mu.Unlock()
+		} else if !matched {
+			// Detection failure: invalid agent couldn't be corrected
+			m.logger.Warn("Could not correct invalid to_agent",
+				"signal_id", signal.GetString("signal_id"),
+				"agent", toAgent,
+			)
+			detectionFailed = true
 		}
+	}
+
+	// Track detection failures (silent failures where invalid agents exist but can't be fixed)
+	if detectionFailed {
+		m.mu.Lock()
+		m.detectionFailures++
+		m.mu.Unlock()
 	}
 
 	// Save if corrections were made
 	if needsSave {
 		if err := m.pb.Save(signal); err != nil {
 			m.logger.Error("Failed to save correction", "error", err, "signal_id", signal.Id)
-			m.mu.Lock()
-			m.errorCount++
-			m.lastError = err
-			m.lastErrorTime = time.Now()
-			m.mu.Unlock()
+			m.recordError("save", err)
 		}
+	}
+}
+
+// validateSignal checks if signal has required fields
+func (m *Monitor) validateSignal(signal *core.Record) bool {
+	signalID := signal.GetString("signal_id")
+	fromAgent := signal.GetString("from_agent")
+	toAgent := signal.GetString("to_agent")
+
+	// Check for missing required fields
+	if signalID == "" || fromAgent == "" || toAgent == "" {
+		m.logger.Warn("Signal missing required fields",
+			"id", signal.Id,
+			"signal_id", signalID,
+			"from_agent", fromAgent,
+			"to_agent", toAgent,
+		)
+		m.mu.Lock()
+		m.validationErrors++
+		m.mu.Unlock()
+		return false
+	}
+
+	return true
+}
+
+// fuzzyMatchAgentWithStats wraps fuzzyMatchAgent with statistics tracking
+func (m *Monitor) fuzzyMatchAgentWithStats(agentID string) (string, bool) {
+	if agentID == "" {
+		return "", false
+	}
+
+	// Track fuzzy match attempt
+	m.mu.Lock()
+	m.fuzzyMatchAttempts++
+	m.mu.Unlock()
+
+	corrected := m.fuzzyMatchAgent(agentID)
+	matched := corrected != "" && corrected != agentID
+
+	// Track success
+	if matched {
+		m.mu.Lock()
+		m.fuzzyMatchSuccess++
+		m.mu.Unlock()
+	}
+
+	return corrected, matched
+}
+
+// recordError tracks errors by type and updates error stats
+func (m *Monitor) recordError(errorType string, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.errorCount++
+	m.errorsByType[errorType]++
+
+	if errorType == "save" {
+		m.saveErrors++
+	}
+
+	if err != nil {
+		m.lastError = err
+		m.lastErrorTime = time.Now()
 	}
 }
 
@@ -299,12 +428,31 @@ func (m *Monitor) Stats() map[string]interface{} {
 		lastErrorStr = m.lastError.Error()
 	}
 
+	// Calculate success rate for fuzzy matching
+	fuzzyMatchRate := 0.0
+	if m.fuzzyMatchAttempts > 0 {
+		fuzzyMatchRate = float64(m.fuzzyMatchSuccess) / float64(m.fuzzyMatchAttempts)
+	}
+
+	// Copy error counts by type
+	errorsByType := make(map[string]int)
+	for k, v := range m.errorsByType {
+		errorsByType[k] = v
+	}
+
 	return map[string]interface{}{
-		"signals_checked":   m.signalCount,
-		"corrections_made":  m.correctionCount,
-		"error_count":       m.errorCount,
-		"last_error":        lastErrorStr,
-		"last_error_time":   m.lastErrorTime,
+		"signals_checked":      m.signalCount,
+		"corrections_made":     m.correctionCount,
+		"error_count":          m.errorCount,
+		"detection_failures":   m.detectionFailures,
+		"validation_errors":    m.validationErrors,
+		"fuzzy_match_attempts": m.fuzzyMatchAttempts,
+		"fuzzy_match_success":  m.fuzzyMatchSuccess,
+		"fuzzy_match_rate":     fuzzyMatchRate,
+		"save_errors":          m.saveErrors,
+		"errors_by_type":       errorsByType,
+		"last_error":           lastErrorStr,
+		"last_error_time":      m.lastErrorTime,
 	}
 }
 

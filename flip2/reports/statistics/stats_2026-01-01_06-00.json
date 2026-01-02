@@ -1,0 +1,47 @@
+{
+  "anomalies": [
+    {
+      "message": "High number of unread signals: 376 (threshold: 100)",
+      "severity": "warning",
+      "type": "high_unread_count",
+      "value": 376
+    },
+    {
+      "message": "No signal activity in the last 24 hours",
+      "severity": "warning",
+      "type": "no_recent_activity",
+      "value": 0
+    }
+  ],
+  "anomaly_count": 2,
+  "by_from_agent": {
+    "AG-win": 6,
+    "Claud-win": 2,
+    "ag-win": 8,
+    "claude-mac": 189,
+    "claude-win": 2,
+    "comm-monitor": 168,
+    "mac": 1
+  },
+  "by_signal_type": {
+    "alert": 4,
+    "message": 362,
+    "ping": 1,
+    "status": 2,
+    "task": 7
+  },
+  "by_to_agent": {
+    "ALL": 1,
+    "Claud-win": 53,
+    "ag-win": 2,
+    "claud-win": 180,
+    "claude-mac": 1,
+    "claude-win": 134,
+    "claudwin": 4,
+    "windows": 1
+  },
+  "node_id": "mac",
+  "timestamp": "2026-01-01T06:00:00",
+  "total_signals": 376,
+  "unread_signals": 376
+}

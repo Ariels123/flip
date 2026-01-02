@@ -1,6 +1,9 @@
 package logger
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"os"
@@ -226,5 +229,356 @@ func TestSetupLogger(t *testing.T) {
 				os.RemoveAll(filepath.Dir(filepath.Dir(logPath))) 
 			}
 		})
+	}
+}
+
+// TestNewLogger tests the Logger constructor.
+func TestNewLogger(t *testing.T) {
+	tests := []struct {
+		name   string
+		format string
+	}{
+		{"JSON format", "json"},
+		{"Text format", "text"},
+		{"Invalid format defaults to text", "invalid"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			logger := NewLogger(&buf, tt.format)
+			if logger == nil {
+				t.Fatal("Expected logger to not be nil")
+			}
+			if logger.logger == nil {
+				t.Fatal("Expected underlying slog.Logger to not be nil")
+			}
+		})
+	}
+}
+
+// TestLoggerInfoCtx tests the InfoCtx method with context fields.
+func TestLoggerInfoCtx(t *testing.T) {
+	var buf bytes.Buffer
+	logger := NewLogger(&buf, "json")
+
+	ctx := context.Background()
+	ctx = WithTaskID(ctx, "task_123")
+	ctx = WithAgentID(ctx, "worker_1")
+
+	logger.InfoCtx(ctx, "task started", "duration_ms", 100)
+
+	output := buf.String()
+	if !strings.Contains(output, "task started") {
+		t.Errorf("Expected 'task started' in output, got: %s", output)
+	}
+	if !strings.Contains(output, "task_123") {
+		t.Errorf("Expected 'task_123' in output, got: %s", output)
+	}
+	if !strings.Contains(output, "worker_1") {
+		t.Errorf("Expected 'worker_1' in output, got: %s", output)
+	}
+	if !strings.Contains(output, "100") {
+		t.Errorf("Expected '100' in output, got: %s", output)
+	}
+}
+
+// TestLoggerErrorCtx tests the ErrorCtx method with context fields.
+func TestLoggerErrorCtx(t *testing.T) {
+	var buf bytes.Buffer
+	logger := NewLogger(&buf, "text")
+
+	ctx := context.Background()
+	ctx = WithTaskID(ctx, "task_456")
+	ctx = WithRequestID(ctx, "req_789")
+
+	logger.ErrorCtx(ctx, "task failed", "error", "timeout")
+
+	output := buf.String()
+	if !strings.Contains(output, "task failed") {
+		t.Errorf("Expected 'task failed' in output, got: %s", output)
+	}
+	if !strings.Contains(output, "task_456") {
+		t.Errorf("Expected 'task_456' in output, got: %s", output)
+	}
+	if !strings.Contains(output, "req_789") {
+		t.Errorf("Expected 'req_789' in output, got: %s", output)
+	}
+	if !strings.Contains(output, "timeout") {
+		t.Errorf("Expected 'timeout' in output, got: %s", output)
+	}
+}
+
+// TestLoggerDebugCtx tests the DebugCtx method.
+func TestLoggerDebugCtx(t *testing.T) {
+	var buf bytes.Buffer
+	logger := NewLogger(&buf, "json")
+
+	ctx := context.Background()
+	ctx = WithPipelineID(ctx, "pipe_001")
+
+	logger.DebugCtx(ctx, "debug message", "stage", "analysis")
+
+	output := buf.String()
+	if !strings.Contains(output, "debug message") {
+		t.Errorf("Expected 'debug message' in output, got: %s", output)
+	}
+	if !strings.Contains(output, "pipe_001") {
+		t.Errorf("Expected 'pipe_001' in output, got: %s", output)
+	}
+}
+
+// TestLoggerWarnCtx tests the WarnCtx method.
+func TestLoggerWarnCtx(t *testing.T) {
+	var buf bytes.Buffer
+	logger := NewLogger(&buf, "text")
+
+	ctx := context.Background()
+	ctx = WithAgentID(ctx, "gemini_1")
+	ctx = WithParentID(ctx, "parent_task")
+
+	logger.WarnCtx(ctx, "warning message", "retry_count", 3)
+
+	output := buf.String()
+	if !strings.Contains(output, "warning message") {
+		t.Errorf("Expected 'warning message' in output, got: %s", output)
+	}
+	if !strings.Contains(output, "gemini_1") {
+		t.Errorf("Expected 'gemini_1' in output, got: %s", output)
+	}
+	if !strings.Contains(output, "parent_task") {
+		t.Errorf("Expected 'parent_task' in output, got: %s", output)
+	}
+}
+
+// TestLoggerWithoutContext tests logging without context extraction.
+func TestLoggerWithoutContext(t *testing.T) {
+	var buf bytes.Buffer
+	logger := NewLogger(&buf, "json")
+
+	logger.Info("plain info", "key", "value")
+	logger.Error("plain error", "code", 500)
+	logger.Debug("plain debug", "item", "test")
+	logger.Warn("plain warning", "level", "high")
+
+	output := buf.String()
+	if !strings.Contains(output, "plain info") {
+		t.Errorf("Expected 'plain info' in output")
+	}
+	if !strings.Contains(output, "plain error") {
+		t.Errorf("Expected 'plain error' in output")
+	}
+	if !strings.Contains(output, "plain debug") {
+		t.Errorf("Expected 'plain debug' in output")
+	}
+	if !strings.Contains(output, "plain warning") {
+		t.Errorf("Expected 'plain warning' in output")
+	}
+}
+
+// TestLoggerWithContext tests the WithContext convenience method.
+func TestLoggerWithContext(t *testing.T) {
+	var buf bytes.Buffer
+	logger := NewLogger(&buf, "json")
+
+	ctx := context.Background()
+	ctx = WithTaskID(ctx, "task_xyz")
+	ctx = WithAgentID(ctx, "agent_abc")
+
+	contextLogger := logger.WithContext(ctx)
+
+	contextLogger.Info("first log", "index", 1)
+	contextLogger.Error("error occurred", "err_code", 42)
+
+	output := buf.String()
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+
+	if len(lines) < 2 {
+		t.Fatalf("Expected at least 2 log lines, got %d", len(lines))
+	}
+
+	// Check first log
+	if !strings.Contains(lines[0], "task_xyz") {
+		t.Errorf("Expected 'task_xyz' in first log, got: %s", lines[0])
+	}
+	if !strings.Contains(lines[0], "agent_abc") {
+		t.Errorf("Expected 'agent_abc' in first log, got: %s", lines[0])
+	}
+	if !strings.Contains(lines[0], "first log") {
+		t.Errorf("Expected 'first log' in first log, got: %s", lines[0])
+	}
+
+	// Check second log
+	if !strings.Contains(lines[1], "task_xyz") {
+		t.Errorf("Expected 'task_xyz' in second log, got: %s", lines[1])
+	}
+	if !strings.Contains(lines[1], "agent_abc") {
+		t.Errorf("Expected 'agent_abc' in second log, got: %s", lines[1])
+	}
+	if !strings.Contains(lines[1], "error occurred") {
+		t.Errorf("Expected 'error occurred' in second log, got: %s", lines[1])
+	}
+}
+
+// TestLoggerJSONFormat tests that JSON output is valid JSON with all context fields.
+func TestLoggerJSONFormat(t *testing.T) {
+	var buf bytes.Buffer
+	logger := NewLogger(&buf, "json")
+
+	ctx := context.Background()
+	ctx = WithTaskID(ctx, "task_json_test")
+	ctx = WithAgentID(ctx, "agent_json")
+	ctx = WithRequestID(ctx, "req_json_001")
+	ctx = WithPipelineID(ctx, "pipe_json")
+	ctx = WithStageID(ctx, "stage_json")
+	ctx = WithParentID(ctx, "parent_json")
+
+	logger.InfoCtx(ctx, "json test message", "custom_field", "custom_value", "duration", 1500)
+
+	output := strings.TrimSpace(buf.String())
+	var logEntry map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &logEntry); err != nil {
+		t.Fatalf("Failed to parse JSON output: %v\nOutput: %s", err, output)
+	}
+
+	// Verify required fields
+	if msg, ok := logEntry["msg"].(string); !ok || msg != "json test message" {
+		t.Errorf("Expected 'msg' field to be 'json test message', got: %v", logEntry["msg"])
+	}
+
+	// Verify context fields
+	if taskID, ok := logEntry["task_id"].(string); !ok || taskID != "task_json_test" {
+		t.Errorf("Expected 'task_id' field to be 'task_json_test', got: %v", logEntry["task_id"])
+	}
+	if agentID, ok := logEntry["agent_id"].(string); !ok || agentID != "agent_json" {
+		t.Errorf("Expected 'agent_id' field to be 'agent_json', got: %v", logEntry["agent_id"])
+	}
+	if requestID, ok := logEntry["request_id"].(string); !ok || requestID != "req_json_001" {
+		t.Errorf("Expected 'request_id' field to be 'req_json_001', got: %v", logEntry["request_id"])
+	}
+	if pipelineID, ok := logEntry["pipeline_id"].(string); !ok || pipelineID != "pipe_json" {
+		t.Errorf("Expected 'pipeline_id' field to be 'pipe_json', got: %v", logEntry["pipeline_id"])
+	}
+	if stageID, ok := logEntry["stage_id"].(string); !ok || stageID != "stage_json" {
+		t.Errorf("Expected 'stage_id' field to be 'stage_json', got: %v", logEntry["stage_id"])
+	}
+	if parentID, ok := logEntry["parent_id"].(string); !ok || parentID != "parent_json" {
+		t.Errorf("Expected 'parent_id' field to be 'parent_json', got: %v", logEntry["parent_id"])
+	}
+
+	// Verify custom fields
+	if customField, ok := logEntry["custom_field"].(string); !ok || customField != "custom_value" {
+		t.Errorf("Expected 'custom_field' to be 'custom_value', got: %v", logEntry["custom_field"])
+	}
+	if duration, ok := logEntry["duration"].(float64); !ok || duration != 1500 {
+		t.Errorf("Expected 'duration' to be 1500, got: %v", logEntry["duration"])
+	}
+
+	// Verify standard fields
+	if _, ok := logEntry["level"].(string); !ok {
+		t.Errorf("Expected 'level' field")
+	}
+	if _, ok := logEntry["time"]; !ok {
+		t.Errorf("Expected 'time' field in JSON output")
+	}
+}
+
+// TestLoggerTextFormat tests text output format.
+func TestLoggerTextFormat(t *testing.T) {
+	var buf bytes.Buffer
+	logger := NewLogger(&buf, "text")
+
+	ctx := context.Background()
+	ctx = WithTaskID(ctx, "task_text")
+	ctx = WithAgentID(ctx, "agent_text")
+
+	logger.InfoCtx(ctx, "text format message", "count", 42)
+
+	output := buf.String()
+	if !strings.Contains(output, "text format message") {
+		t.Errorf("Expected message in text output")
+	}
+	if !strings.Contains(output, "task_text") {
+		t.Errorf("Expected task_id in text output")
+	}
+	if !strings.Contains(output, "agent_text") {
+		t.Errorf("Expected agent_id in text output")
+	}
+	if !strings.Contains(output, "42") {
+		t.Errorf("Expected custom field value in text output")
+	}
+}
+
+// TestLoggerEmptyContext tests logging with empty/no context fields.
+func TestLoggerEmptyContext(t *testing.T) {
+	var buf bytes.Buffer
+	logger := NewLogger(&buf, "json")
+
+	ctx := context.Background()
+	// Don't set any context fields
+
+	logger.InfoCtx(ctx, "message with no context fields", "field", "value")
+
+	output := strings.TrimSpace(buf.String())
+	var logEntry map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &logEntry); err != nil {
+		t.Fatalf("Failed to parse JSON output: %v", err)
+	}
+
+	// Verify that only the custom field is present (no empty context fields)
+	if msg, ok := logEntry["msg"].(string); !ok || msg != "message with no context fields" {
+		t.Errorf("Expected correct message")
+	}
+	if field, ok := logEntry["field"].(string); !ok || field != "value" {
+		t.Errorf("Expected custom field in JSON")
+	}
+
+	// Context fields should not be in the output if they weren't set
+	if _, ok := logEntry["task_id"]; ok {
+		t.Errorf("Expected no task_id field when not set")
+	}
+}
+
+// TestLoggerMultipleContextFields tests logging with multiple context fields set via LogContextFields.
+func TestLoggerMultipleContextFields(t *testing.T) {
+	var buf bytes.Buffer
+	logger := NewLogger(&buf, "json")
+
+	fields := LogContextFields{
+		TaskID:     "multi_task",
+		AgentID:    "multi_agent",
+		RequestID:  "multi_req",
+		PipelineID: "multi_pipe",
+		StageID:    "multi_stage",
+		ParentID:   "multi_parent",
+	}
+
+	ctx := fields.Apply(context.Background())
+	logger.InfoCtx(ctx, "multi field test")
+
+	output := strings.TrimSpace(buf.String())
+	var logEntry map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &logEntry); err != nil {
+		t.Fatalf("Failed to parse JSON output: %v", err)
+	}
+
+	// Verify all fields are present
+	if val, ok := logEntry["task_id"].(string); !ok || val != "multi_task" {
+		t.Errorf("task_id mismatch")
+	}
+	if val, ok := logEntry["agent_id"].(string); !ok || val != "multi_agent" {
+		t.Errorf("agent_id mismatch")
+	}
+	if val, ok := logEntry["request_id"].(string); !ok || val != "multi_req" {
+		t.Errorf("request_id mismatch")
+	}
+	if val, ok := logEntry["pipeline_id"].(string); !ok || val != "multi_pipe" {
+		t.Errorf("pipeline_id mismatch")
+	}
+	if val, ok := logEntry["stage_id"].(string); !ok || val != "multi_stage" {
+		t.Errorf("stage_id mismatch")
+	}
+	if val, ok := logEntry["parent_id"].(string); !ok || val != "multi_parent" {
+		t.Errorf("parent_id mismatch")
 	}
 }

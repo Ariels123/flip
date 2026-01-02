@@ -574,7 +574,7 @@ func (h *APIHandlers) HandleGetSignals(e *core.RequestEvent) error {
 		}
 	}
 
-	records, err := h.pb.FindRecordsByFilter("signals", filter, "-created", 50, 0)
+	records, err := h.pb.FindRecordsByFilter("signals", filter, "-@created", 50, 0)
 	if err != nil {
 		return e.JSON(http.StatusInternalServerError, map[string]string{
 			"error": "Failed to fetch signals",

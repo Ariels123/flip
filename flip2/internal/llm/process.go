@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"regexp"
@@ -14,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"flip2/internal/errors"
 )
 
 // ProcessBackend executes AI CLI tools via stdin/stdout.
@@ -32,6 +35,7 @@ type ProcessBackend struct {
 	defaultModel string
 	modelConfigs map[string]ModelConfig
 	timeout      time.Duration
+	logger       *slog.Logger
 
 	mu             sync.RWMutex
 	execCount      int64
@@ -49,6 +53,7 @@ type ProcessBackendConfig struct {
 	DefaultModel string
 	ModelConfigs map[string]ModelConfig
 	Timeout      time.Duration
+	Logger       *slog.Logger
 }
 
 // NewProcessBackend creates a ProcessBackend with the given configuration.
@@ -56,6 +61,12 @@ func NewProcessBackend(cfg ProcessBackendConfig) *ProcessBackend {
 	timeout := cfg.Timeout
 	if timeout == 0 {
 		timeout = 5 * time.Minute
+	}
+
+	logger := cfg.Logger
+	if logger == nil {
+		// Use a default noop logger if none provided
+		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 
 	return &ProcessBackend{
@@ -66,6 +77,7 @@ func NewProcessBackend(cfg ProcessBackendConfig) *ProcessBackend {
 		defaultModel: cfg.DefaultModel,
 		modelConfigs: cfg.ModelConfigs,
 		timeout:      timeout,
+		logger:       logger,
 	}
 }
 
@@ -168,6 +180,14 @@ func (p *ProcessBackend) Execute(ctx context.Context, prompt string, opts *Optio
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	// Log execution start
+	p.logger.InfoContext(ctx, "executing command",
+		"backend", p.name,
+		"command", p.command,
+		"model", p.getModel(opts),
+		"timeout_ms", timeout.Milliseconds(),
+	)
+
 	// Create command
 	cmd := exec.CommandContext(execCtx, p.command, args...)
 
@@ -178,29 +198,59 @@ func (p *ProcessBackend) Execute(ctx context.Context, prompt string, opts *Optio
 
 	// Start the command
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("failed to start %s: %w", p.command, err)
+		errMsg := fmt.Sprintf("failed to start %s", p.command)
+		p.logger.ErrorContext(ctx, errMsg,
+			"backend", p.name,
+			"command", p.command,
+			"error", err.Error(),
+		)
+		return nil, errors.NewExecutionFailed(errMsg, true, err)
 	}
 
 	// Wait for command to finish
 	err := cmd.Wait()
+	durationMs := time.Since(start).Milliseconds()
 
 	// Check for context cancellation
 	if execCtx.Err() == context.DeadlineExceeded {
-		return nil, fmt.Errorf("execution timeout after %v", timeout)
+		p.logger.WarnContext(ctx, "execution timeout exceeded",
+			"backend", p.name,
+			"command", p.command,
+			"timeout_ms", timeout.Milliseconds(),
+			"duration_ms", durationMs,
+		)
+		return nil, errors.NewTimeout(timeout, execCtx.Err())
 	}
 	if execCtx.Err() == context.Canceled {
-		return nil, fmt.Errorf("execution canceled")
+		p.logger.InfoContext(ctx, "execution canceled",
+			"backend", p.name,
+			"command", p.command,
+			"duration_ms", durationMs,
+		)
+		return nil, errors.NewCanceled("execution was canceled")
 	}
 
 	// Check for quota exhaustion in stderr
 	if p.isQuotaError(stderr.String()) {
+		p.logger.WarnContext(ctx, "quota exhausted",
+			"backend", p.name,
+			"command", p.command,
+			"duration_ms", durationMs,
+		)
 		p.markQuotaExhausted()
-		return nil, fmt.Errorf("quota exhausted: %s", stderr.String())
+		return nil, errors.NewQuotaExhausted("quota exhausted", time.Now().Add(1*time.Hour))
 	}
 
 	// Check for other errors
 	if err != nil {
-		return nil, fmt.Errorf("%s error: %w, stderr: %s", p.command, err, stderr.String())
+		p.logger.ErrorContext(ctx, "command execution failed",
+			"backend", p.name,
+			"command", p.command,
+			"error", err.Error(),
+			"duration_ms", durationMs,
+			"stderr_length", len(stderr.String()),
+		)
+		return nil, errors.NewExecutionFailed(fmt.Sprintf("%s error: %s", p.command, stderr.String()), false, err)
 	}
 
 	// Parse response
@@ -208,6 +258,17 @@ func (p *ProcessBackend) Execute(ctx context.Context, prompt string, opts *Optio
 	model := p.getModel(opts)
 	inputTokens, outputTokens := p.estimateTokens(prompt, content)
 	cost := p.calculateCost(model, inputTokens, outputTokens)
+
+	// Log successful execution
+	p.logger.InfoContext(ctx, "command execution completed",
+		"backend", p.name,
+		"command", p.command,
+		"model", model,
+		"duration_ms", durationMs,
+		"input_tokens", inputTokens,
+		"output_tokens", outputTokens,
+		"cost_usd", fmt.Sprintf("%.6f", cost),
+	)
 
 	// Update metrics
 	p.mu.Lock()
@@ -242,6 +303,15 @@ func (p *ProcessBackend) Stream(ctx context.Context, prompt string, opts *Option
 	}
 
 	execCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	// Log streaming start
+	p.logger.InfoContext(ctx, "starting stream",
+		"backend", p.name,
+		"command", p.command,
+		"model", p.getModel(opts),
+		"timeout_ms", timeout.Milliseconds(),
+	)
 
 	// Create command
 	cmd := exec.CommandContext(execCtx, p.command, args...)
@@ -249,21 +319,40 @@ func (p *ProcessBackend) Stream(ctx context.Context, prompt string, opts *Option
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		cancel()
-		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
+		errMsg := "failed to create stdout pipe"
+		p.logger.ErrorContext(ctx, errMsg,
+			"backend", p.name,
+			"command", p.command,
+			"error", err.Error(),
+		)
+		return nil, errors.NewExecutionFailed(errMsg, true, err)
 	}
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		cancel()
-		return nil, fmt.Errorf("failed to create stderr pipe: %w", err)
+		errMsg := "failed to create stderr pipe"
+		p.logger.ErrorContext(ctx, errMsg,
+			"backend", p.name,
+			"command", p.command,
+			"error", err.Error(),
+		)
+		return nil, errors.NewExecutionFailed(errMsg, true, err)
 	}
 
 	if err := cmd.Start(); err != nil {
 		cancel()
-		return nil, fmt.Errorf("failed to start %s: %w", p.command, err)
+		errMsg := fmt.Sprintf("failed to start %s", p.command)
+		p.logger.ErrorContext(ctx, errMsg,
+			"backend", p.name,
+			"command", p.command,
+			"error", err.Error(),
+		)
+		return nil, errors.NewExecutionFailed(errMsg, true, err)
 	}
 
 	go func() {
+		streamStartTime := time.Now()
 		defer close(ch)
 		defer cancel()
 
@@ -280,6 +369,10 @@ func (p *ProcessBackend) Stream(ctx context.Context, prompt string, opts *Option
 			char, _, err := reader.ReadRune()
 			if err != nil {
 				if err != io.EOF {
+					p.logger.DebugContext(ctx, "stream read error",
+						"backend", p.name,
+						"error", err.Error(),
+					)
 					ch <- StreamChunk{Error: err, Done: true}
 				}
 				break
@@ -291,6 +384,13 @@ func (p *ProcessBackend) Stream(ctx context.Context, prompt string, opts *Option
 			select {
 			case ch <- StreamChunk{Text: text}:
 			case <-execCtx.Done():
+				durationMs := time.Since(streamStartTime).Milliseconds()
+				p.logger.WarnContext(ctx, "stream context canceled",
+					"backend", p.name,
+					"command", p.command,
+					"duration_ms", durationMs,
+					"bytes_streamed", len(fullContent.String()),
+				)
 				ch <- StreamChunk{Error: execCtx.Err(), Done: true}
 				return
 			}
@@ -298,22 +398,45 @@ func (p *ProcessBackend) Stream(ctx context.Context, prompt string, opts *Option
 
 		// Wait for command to finish
 		cmdErr := cmd.Wait()
+		durationMs := time.Since(streamStartTime).Milliseconds()
 
 		// Check for errors
 		if p.isQuotaError(stderrBuf.String()) {
+			p.logger.WarnContext(ctx, "quota exhausted during stream",
+				"backend", p.name,
+				"command", p.command,
+				"duration_ms", durationMs,
+			)
 			p.markQuotaExhausted()
-			ch <- StreamChunk{Error: fmt.Errorf("quota exhausted"), Done: true}
+			ch <- StreamChunk{Error: errors.NewQuotaExhausted("quota exhausted", time.Now().Add(1*time.Hour)), Done: true}
 			return
 		}
 
 		if cmdErr != nil && execCtx.Err() == nil {
-			ch <- StreamChunk{Error: fmt.Errorf("%s error: %w", p.command, cmdErr), Done: true}
+			p.logger.ErrorContext(ctx, "stream command failed",
+				"backend", p.name,
+				"command", p.command,
+				"error", cmdErr.Error(),
+				"duration_ms", durationMs,
+				"stderr_length", len(stderrBuf.String()),
+			)
+			ch <- StreamChunk{Error: errors.NewExecutionFailed(fmt.Sprintf("%s error", p.command), false, cmdErr), Done: true}
 			return
 		}
 
 		// Final chunk with token counts
 		content := fullContent.String()
 		inputTokens, outputTokens := p.estimateTokens(prompt, content)
+
+		// Log successful stream completion
+		p.logger.InfoContext(ctx, "stream completed",
+			"backend", p.name,
+			"command", p.command,
+			"duration_ms", durationMs,
+			"input_tokens", inputTokens,
+			"output_tokens", outputTokens,
+			"content_length", len(content),
+		)
 
 		ch <- StreamChunk{
 			Done:         true,

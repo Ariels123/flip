@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Test PocketBase Access</title>
+  <script src="https://cdn.jsdelivr.net/npm/pocketbase@0.21.3/dist/pocketbase.umd.js"></script>
+</head>
+<body>
+  <h1>Testing PocketBase Direct Access</h1>
+  <div id="results"></div>
+  <script>
+    const pb = new PocketBase('https://localhost:8090');
+    const results = document.getElementById('results');
+    
+    // Test without auth
+    pb.collection('agents').getList(1, 5).then(result => {
+      results.innerHTML += '<p>✅ Agents loaded: ' + result.items.length + '</p>';
+    }).catch(err => {
+      results.innerHTML += '<p>❌ Agents failed: ' + err.message + '</p>';
+      console.error('Error details:', err);
+    });
+    
+    pb.collection('signals').getList(1, 5).then(result => {
+      results.innerHTML += '<p>✅ Signals loaded: ' + result.items.length + '</p>';
+    }).catch(err => {
+      results.innerHTML += '<p>❌ Signals failed: ' + err.message + '</p>';
+    });
+  </script>
+</body>
+</html>

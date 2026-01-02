@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -16,9 +17,11 @@ import (
 	"syscall"
 	"time"
 
+	"flip2/internal/alerts"
 	"flip2/internal/api"
 	"flip2/internal/archiver"
 	"flip2/internal/auth"
+	"flip2/internal/codereview"
 	"flip2/internal/commmonitor"
 	"flip2/internal/config"
 	"flip2/internal/costtracker"
@@ -29,6 +32,9 @@ import (
 	"flip2/internal/scheduler"
 	"flip2/internal/supervisor"
 	"flip2/internal/sync"
+	"flip2/internal/vibescore"
+
+	_ "flip2/pb_migrations" // Import migrations to trigger init()
 
 	pocketbase "github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/apis"
@@ -40,6 +46,7 @@ import (
 // Daemon manages the FLIP2 service lifecycle
 type Daemon struct {
 	config         *config.Config
+	configPath     string // Store config path for relative path resolution
 	pb             *pocketbase.PocketBase
 	scheduler      *scheduler.Scheduler
 	executor       *executor.Executor
@@ -62,6 +69,13 @@ type Daemon struct {
 	supervisor     *supervisor.Supervisor
 	// Cost tracker for LLM API costs
 	costTracker    *costtracker.Tracker
+	// Alerting system
+	alertManager   *alerts.Manager
+	alertEvaluator *alerts.Evaluator
+	// Code review system
+	codeReviewService *codereview.Service
+	// Vibe Scorecard quality evaluation system
+	vibeEvaluator *vibescore.Evaluator
 }
 
 // New creates a new Daemon instance
@@ -84,6 +98,7 @@ func New(configPath string) (*Daemon, error) {
 
 	return &Daemon{
 		config:  cfg,
+		configPath: configPath,
 		logger:  mainLogger,
 		pidFile: cfg.Flip2.Daemon.PIDFile,
 		currentLogPath: currentLogPath,
@@ -137,7 +152,9 @@ func (d *Daemon) Start() error {
 
 	// Initialize Scheduler and Executor
 	d.scheduler = scheduler.New(d.pb, d.logger)
-	d.executor = executor.New(d.pb, d.config, d.logger)
+	// Wrap slog.Logger with context-aware Logger for executor
+	executorLogger := logger.WrapSlogLogger(d.logger)
+	d.executor = executor.New(d.pb, d.config, executorLogger)
 
 	// Initialize Sync components if enabled
 	if d.config.Flip2.Sync.Enabled {
@@ -192,7 +209,14 @@ func (d *Daemon) Start() error {
 	d.logger.Info("Supervisor started", "workers", d.supervisor.WorkerCount())
 
 	// Communication Monitor will be started in OnServe hook (after PocketBase is ready)
-	d.commMonitor = commmonitor.New(d.pb, commmonitor.DefaultConfig(), d.logger)
+	// Build config from daemon config
+	commMonitorConfig := commmonitor.Config{
+		Enabled:         d.config.Flip2.CommMonitor.Enabled,
+		Threshold:       d.config.Flip2.CommMonitor.Threshold,
+		ValidAgents:     d.config.Flip2.CommMonitor.ValidAgents,
+		TypoCorrections: d.config.Flip2.CommMonitor.TypoCorrections,
+	}
+	d.commMonitor = commmonitor.New(d.pb, commMonitorConfig, d.logger)
 	d.registerCommMonitor()
 
 	// Initialize Message Archiver (if enabled)
@@ -201,6 +225,15 @@ func (d *Daemon) Start() error {
 	// Initialize FLIP2 API components (Step 3)
 	// This also initializes the cost tracker
 	d.initializeFLIP2API()
+
+	// Initialize Alerting System
+	d.initializeAlerts()
+
+	// Initialize Code Review System
+	d.initializeCodeReview()
+
+	// Initialize Vibe Scorecard Quality Evaluation
+	d.initializeVibeScorecard()
 
 	d.logger.Info("PocketBase initialized", "port", d.config.Flip2.PocketBase.Port)
 
@@ -403,6 +436,11 @@ func (d *Daemon) registerHooks() {
 				stats["agents_total"] = count
 			}
 
+			// Add communication monitor stats
+			if d.commMonitor != nil {
+				stats["commmonitor"] = d.commMonitor.Stats()
+			}
+
 			return e.JSON(http.StatusOK, stats) // Use e.JSON
 		})
 		return e.Next()
@@ -443,6 +481,118 @@ func (d *Daemon) registerHooks() {
 			}
 
 			return evt.JSON(http.StatusOK, map[string]string{"status": "signaled"})
+		})
+		return e.Next()
+	})
+
+	// Code Review Trigger Endpoint
+	d.pb.OnServe().BindFunc(func(e *core.ServeEvent) error {
+		e.Router.POST("/api/code-review/trigger", func(evt *core.RequestEvent) error {
+			var data struct {
+				ReviewType string `json:"review_type"`
+				Reviewer   string `json:"reviewer"`
+				Scope      string `json:"scope"`
+				Target     string `json:"target"`
+			}
+
+			if err := json.NewDecoder(evt.Request.Body).Decode(&data); err != nil {
+				return evt.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request body"})
+			}
+
+			// Set defaults
+			if data.ReviewType == "" {
+				data.ReviewType = "on_demand"
+			}
+			if data.Reviewer == "" {
+				data.Reviewer = "gemini"
+			}
+			if data.Scope == "" {
+				data.Scope = "uncommitted"
+			}
+
+			// Check if code review service is initialized
+			if d.codeReviewService == nil {
+				return evt.JSON(http.StatusServiceUnavailable, map[string]string{
+					"error": "Code review service not initialized",
+				})
+			}
+
+			// Start the review
+			reviewID, err := d.codeReviewService.StartReview(
+				evt.Request.Context(),
+				codereview.ReviewType(data.ReviewType),
+				data.Reviewer,
+				codereview.ReviewScope(data.Scope),
+				data.Target,
+			)
+
+			if err != nil {
+				d.logger.Error("Failed to start code review", "error", err)
+				return evt.JSON(http.StatusInternalServerError, map[string]string{
+					"error": fmt.Sprintf("Failed to start review: %v", err),
+				})
+			}
+
+			d.logger.Info("Code review triggered via API",
+				"review_id", reviewID,
+				"reviewer", data.Reviewer,
+				"scope", data.Scope,
+			)
+
+			return evt.JSON(http.StatusOK, map[string]interface{}{
+				"review_id": reviewID,
+				"status":    "started",
+				"reviewer":  data.Reviewer,
+				"scope":     data.Scope,
+			})
+		})
+		return e.Next()
+	})
+
+	// Public Dashboard Data Endpoint (no auth required)
+	d.pb.OnServe().BindFunc(func(e *core.ServeEvent) error {
+		e.Router.GET("/dashboard/data", func(evt *core.RequestEvent) error {
+			// Get data directly from database without authentication
+			data := map[string]interface{}{}
+
+			if agents, err := d.pb.FindRecordsByFilter("agents", "", "", 100, 0); err == nil {
+				data["agents"] = agents
+			} else {
+				data["agents"] = []interface{}{}
+				d.logger.Warn("Failed to load agents for dashboard", "error", err)
+			}
+
+			if signals, err := d.pb.FindRecordsByFilter("signals", "", "", 50, 0); err == nil {
+				data["signals"] = signals
+			} else {
+				data["signals"] = []interface{}{}
+				d.logger.Warn("Failed to load signals for dashboard", "error", err)
+			}
+
+			if costs, err := d.pb.FindRecordsByFilter("costs", "", "-timestamp", 100, 0); err == nil {
+				data["costs"] = costs
+			} else {
+				data["costs"] = []interface{}{}
+			}
+
+			if alerts, err := d.pb.FindRecordsByFilter("alerts", "state = 'firing'", "", 100, 0); err == nil {
+				data["alerts"] = alerts
+			} else {
+				data["alerts"] = []interface{}{}
+			}
+
+			if codeReviews, err := d.pb.FindRecordsByFilter("code_reviews", "", "-started_at", 10, 0); err == nil {
+				data["code_reviews"] = codeReviews
+			} else {
+				data["code_reviews"] = []interface{}{}
+			}
+
+			// Add communication monitor stats
+			if d.commMonitor != nil {
+				data["commmonitor"] = d.commMonitor.Stats()
+			}
+
+			return evt.JSON(http.StatusOK, data)
 		})
 		return e.Next()
 	})
@@ -511,8 +661,8 @@ func (d *Daemon) registerJobs() {
 	})
 	
 	// Zombie Task Reaper
-	// Runs every 5 minutes (Seconds Minutes Hours DOM Month DOW)
-	d.scheduler.RegisterJob("zombie-reaper", "0 */5 * * * *", func(ctx context.Context) error {
+	// Runs every 10 minutes (Seconds Minutes Hours DOM Month DOW)
+	d.scheduler.RegisterJob("zombie-reaper", "0 */10 * * * *", func(ctx context.Context) error {
 		// Find tasks that are in_progress
 		// Using FindRecordsByFilter(collection, filter, sort, limit, offset)
 		records, err := d.pb.FindRecordsByFilter("tasks", "status = 'in_progress'", "", 100, 0)
@@ -539,8 +689,8 @@ func (d *Daemon) registerJobs() {
 				continue
 			}
 			
-			// If last_seen > 5 minutes ago
-			if time.Since(lastSeen.Time()) > 5*time.Minute {
+			// If last_seen > 10 minutes ago (increased from 5 to prevent false positives)
+			if time.Since(lastSeen.Time()) > 10*time.Minute {
 				d.logger.Warn("Reaper: Detected zombie task", "task_id", rec.Id, "agent_id", assigneeID)
 				
 				// Reset task
@@ -978,6 +1128,35 @@ func (d *Daemon) registerJobs() {
 
 		return nil
 	})
+
+	// Periodic Code Review - Every 6 hours
+	// Reviews uncommitted changes to catch issues early
+	d.scheduler.RegisterJob("periodic-code-review", "0 0 */6 * * *", func(ctx context.Context) error {
+		d.logger.Info("Running periodic code review")
+
+		// Check if code review service is available
+		if d.codeReviewService == nil {
+			d.logger.Warn("Code review service not initialized, skipping periodic review")
+			return nil
+		}
+
+		// Start review using Gemini (cost-efficient for routine reviews)
+		reviewID, err := d.codeReviewService.StartReview(
+			ctx,
+			codereview.ReviewTypePeriodic,
+			"gemini",
+			codereview.ScopeUncommitted,
+			"",
+		)
+
+		if err != nil {
+			d.logger.Error("Failed to start periodic code review", "error", err)
+			return err
+		}
+
+		d.logger.Info("Periodic code review started", "review_id", reviewID)
+		return nil
+	})
 }
 
 func (d *Daemon) daemonize() error {
@@ -1115,6 +1294,21 @@ Keep your response concise (under 500 words) and actionable.`, string(statsJSON)
 		if err != nil {
 			d.logger.Warn("Gemini analysis failed", "error", err)
 			return
+		}
+
+		// Record cost if tracker is available
+		if d.costTracker != nil {
+			if err := d.costTracker.RecordCost(
+				analysisCtx,
+				"system-analyzer",
+				response.Model,
+				"",
+				response.InputTokens,
+				response.OutputTokens,
+				response.CostUSD,
+			); err != nil {
+				d.logger.Debug("Failed to record cost for Gemini analysis", "error", err)
+			}
 		}
 
 		// Prepare the analysis report
@@ -1482,4 +1676,422 @@ func (d *Daemon) initializeArchiver() {
 	d.logger.Info("Message archiver initialized",
 		"active_agents", archiverConfig.ActiveAgents,
 		"deprecated_agents", archiverConfig.DeprecatedAgents)
+}
+// initializeAlerts sets up the alerting system (deferred until PocketBase is ready)
+func (d *Daemon) initializeAlerts() {
+	d.logger.Info("Initializing alerting system (will start after PocketBase is ready)")
+
+	// Load alert rules from config - construct path relative to config directory
+	configDir := filepath.Dir(d.configPath)
+	rulesPath := filepath.Join(configDir, "alerts.yaml")
+	rules, err := alerts.LoadRules(rulesPath)
+	if err != nil {
+		d.logger.Error("Failed to load alert rules", "error", err, "path", rulesPath)
+		d.logger.Warn("Alerting system disabled due to configuration error")
+		return
+	}
+	d.logger.Info("Alert rules loaded", "count", len(rules.Alerts), "path", rulesPath)
+
+	// Initialize alerting components via OnServe hook (after PocketBase is ready)
+	d.pb.OnServe().BindFunc(func(e *core.ServeEvent) error {
+		d.logger.Info("Starting alerting system components")
+
+		// Create alert store
+		store := alerts.NewPBAlertStore(d.pb)
+
+		// Create alert manager
+		d.alertManager = alerts.NewManager(store, d.logger)
+		d.logger.Info("Alert manager initialized")
+
+		// Create dispatcher for notifications
+		dispatcher, err := alerts.NewDispatcher(rules, d.logger)
+		if err != nil {
+			d.logger.Error("Failed to create alert dispatcher", "error", err)
+			d.logger.Warn("Notifications disabled, alerts will only be stored in database")
+		} else {
+			d.alertManager.SetDispatcher(dispatcher)
+			d.logger.Info("Alert dispatcher configured")
+		}
+
+		// Create metric provider
+		metrics := alerts.NewPBMetricProvider(d.pb, d.config.Flip2.PocketBase.DataDir)
+		d.logger.Info("Metric provider initialized")
+
+		// Create evaluator
+		evaluator, err := alerts.NewEvaluator(d.alertManager, rules, metrics, d.logger)
+		if err != nil {
+			d.logger.Error("Failed to create alert evaluator", "error", err)
+			d.logger.Warn("Alerting system disabled")
+			return e.Next()
+		}
+		d.alertEvaluator = evaluator
+		d.logger.Info("Alert evaluator initialized", "interval", rules.Evaluation.Interval)
+
+		// Start evaluator
+		d.alertEvaluator.Start()
+		enabledCount := countEnabledRules(rules)
+		d.logger.Info("Alert evaluator started",
+			"interval", rules.Evaluation.Interval,
+			"rules_enabled", enabledCount)
+
+		d.logger.Info("Alerting system started successfully")
+		return e.Next()
+	})
+}
+
+// countEnabledRules counts how many rules are enabled
+func countEnabledRules(rules *alerts.RuleSet) int {
+	count := 0
+	for _, rule := range rules.Alerts {
+		if rule.Enabled {
+			count++
+		}
+	}
+	return count
+}
+
+// initializeCodeReview sets up the code review system (deferred until PocketBase is ready)
+func (d *Daemon) initializeCodeReview() {
+	d.logger.Info("Initializing code review system (will start after PocketBase is ready)")
+
+	// Get repository path (current working directory)
+	repoPath, err := os.Getwd()
+	if err != nil {
+		d.logger.Error("Failed to get working directory", "error", err)
+		d.logger.Warn("Code review system disabled")
+		return
+	}
+
+	// Initialize code review components via OnServe hook (after PocketBase is ready)
+	d.pb.OnServe().BindFunc(func(e *core.ServeEvent) error {
+		d.logger.Info("Starting code review system components")
+
+		// Create review store
+		store := codereview.NewPBStore(d.pb)
+
+		// Create code review service
+		d.codeReviewService = codereview.NewService(store, repoPath, d.logger)
+		d.logger.Info("Code review service initialized", "repo_path", repoPath)
+
+		// Register Gemini reviewer (cheaper for routine reviews)
+		geminiReviewer := codereview.NewLLMReviewer(
+			"gemini",
+			"gemini",
+			repoPath,
+			func(ctx context.Context, backendName, prompt string) (string, error) {
+				backend, ok := d.llmRegistry.Get(backendName)
+				if !ok {
+					return "", fmt.Errorf("backend not found: %s", backendName)
+				}
+				resp, err := backend.Execute(ctx, prompt, &llm.Options{})
+				if err != nil {
+					return "", err
+				}
+
+				// Record cost if tracker is available
+				if d.costTracker != nil {
+					if err := d.costTracker.RecordCost(
+						ctx,
+						"code-reviewer",
+						resp.Model,
+						"",
+						resp.InputTokens,
+						resp.OutputTokens,
+						resp.CostUSD,
+					); err != nil {
+						d.logger.Debug("Failed to record cost for code review", "error", err)
+					}
+				}
+
+				return resp.Content, nil
+			},
+		)
+		d.codeReviewService.RegisterReviewer(geminiReviewer)
+		d.logger.Info("Registered Gemini reviewer")
+
+		// Register Claude reviewer (for complex reviews)
+		claudeReviewer := codereview.NewLLMReviewer(
+			"claude",
+			"claude",
+			repoPath,
+			func(ctx context.Context, backendName, prompt string) (string, error) {
+				backend, ok := d.llmRegistry.Get(backendName)
+				if !ok {
+					return "", fmt.Errorf("backend not found: %s", backendName)
+				}
+				resp, err := backend.Execute(ctx, prompt, &llm.Options{})
+				if err != nil {
+					return "", err
+				}
+
+				// Record cost if tracker is available
+				if d.costTracker != nil {
+					if err := d.costTracker.RecordCost(
+						ctx,
+						"code-reviewer",
+						resp.Model,
+						"",
+						resp.InputTokens,
+						resp.OutputTokens,
+						resp.CostUSD,
+					); err != nil {
+						d.logger.Debug("Failed to record cost for code review", "error", err)
+					}
+				}
+
+				return resp.Content, nil
+			},
+		)
+		d.codeReviewService.RegisterReviewer(claudeReviewer)
+		d.logger.Info("Registered Claude reviewer")
+
+		d.logger.Info("Code review system started successfully")
+		return e.Next()
+	})
+}
+
+// initializeVibeScorecard sets up the Vibe Scorecard quality evaluation system
+func (d *Daemon) initializeVibeScorecard() {
+	d.logger.Info("Initializing Vibe Scorecard system (will start after PocketBase is ready)")
+
+	// Initialize via OnServe hook (after PocketBase is ready)
+	d.pb.OnServe().BindFunc(func(e *core.ServeEvent) error {
+		d.logger.Info("Starting Vibe Scorecard evaluator")
+
+		// Get Claude backend for quality evaluation (best reasoning capabilities)
+		claudeBackend, ok := d.llmRegistry.Get("claude")
+		if !ok {
+			d.logger.Warn("Claude backend not available, Vibe Scorecard disabled")
+			return e.Next()
+		}
+
+		// Create LLM backend wrapper that implements vibescore.LLMBackend interface
+		wrappedBackend := &vibeScoreLLMBackend{
+			backend:     claudeBackend,
+			costTracker: d.costTracker,
+			logger:      d.logger,
+		}
+
+		// Create evaluator with default threshold of 6.0
+		d.vibeEvaluator = vibescore.NewEvaluator(wrappedBackend, 6.0, d.logger)
+		d.logger.Info("Vibe Scorecard evaluator initialized",
+			"evaluator", "claude",
+			"threshold", 6.0)
+
+		// Register API endpoint for triggering evaluations
+		e.Router.POST("/api/vibescore/evaluate", func(evt *core.RequestEvent) error {
+			var data struct {
+				TaskID         string `json:"task_id"`
+				TaskTitle      string `json:"task_title"`
+				TaskResult     string `json:"task_result"`
+				RetryCount     int    `json:"retry_count"`
+				PreviousScoreID string `json:"previous_score_id"`
+			}
+
+			if err := json.NewDecoder(evt.Request.Body).Decode(&data); err != nil {
+				return evt.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request body"})
+			}
+
+			// Evaluate task
+			ctx := evt.Request.Context()
+			scorecard, err := d.vibeEvaluator.EvaluateTask(
+				ctx,
+				data.TaskID,
+				data.TaskTitle,
+				data.TaskResult,
+				data.RetryCount,
+				data.PreviousScoreID,
+			)
+			if err != nil {
+				d.logger.Error("Failed to evaluate task", "task_id", data.TaskID, "error", err)
+				return evt.JSON(http.StatusInternalServerError, map[string]string{
+					"error": fmt.Sprintf("Evaluation failed: %v", err),
+				})
+			}
+
+			// Save scorecard to database
+			collection, err := d.pb.FindCollectionByNameOrId("vibescore")
+			if err != nil {
+				d.logger.Error("Vibescore collection not found", "error", err)
+				return evt.JSON(http.StatusInternalServerError, map[string]string{
+					"error": "Vibescore collection not found",
+				})
+			}
+
+			record := core.NewRecord(collection)
+			record.Set("task_id", scorecard.TaskID)
+			record.Set("correctness", scorecard.Correctness)
+			record.Set("efficiency", scorecard.Efficiency)
+			record.Set("maintainability", scorecard.Maintainability)
+			record.Set("security", scorecard.Security)
+			record.Set("overall_score", scorecard.OverallScore)
+			record.Set("evaluator", scorecard.Evaluator)
+			record.Set("evaluator_model", scorecard.EvaluatorModel)
+			record.Set("evaluated_at", scorecard.EvaluatedAt)
+			record.Set("correctness_feedback", scorecard.CorrectnessFeedback)
+			record.Set("efficiency_feedback", scorecard.EfficiencyFeedback)
+			record.Set("maintainability_feedback", scorecard.MaintainabilityFeedback)
+			record.Set("security_feedback", scorecard.SecurityFeedback)
+			record.Set("summary_feedback", scorecard.SummaryFeedback)
+			record.Set("improvement_suggestions", scorecard.ImprovementSuggestions)
+			record.Set("status", string(scorecard.Status))
+			record.Set("quality_threshold", scorecard.QualityThreshold)
+			record.Set("retry_count", scorecard.RetryCount)
+			record.Set("previous_score_id", scorecard.PreviousScoreID)
+
+			if err := d.pb.Save(record); err != nil {
+				d.logger.Error("Failed to save scorecard", "task_id", data.TaskID, "error", err)
+				return evt.JSON(http.StatusInternalServerError, map[string]string{
+					"error": fmt.Sprintf("Failed to save scorecard: %v", err),
+				})
+			}
+
+			scorecard.ID = record.Id
+			d.logger.Info("Vibe Scorecard evaluation completed",
+				"task_id", data.TaskID,
+				"overall_score", scorecard.OverallScore,
+				"status", scorecard.Status,
+				"scorecard_id", record.Id)
+
+			return evt.JSON(http.StatusOK, scorecard)
+		})
+
+		// Register hook for automatic task evaluation
+		d.pb.OnRecordUpdate("tasks").BindFunc(func(re *core.RecordEvent) error {
+			task := re.Record
+
+			// Only evaluate tasks that just completed
+			if task.GetString("status") == "done" && task.GetString("result") != "" {
+				// Skip if already evaluated (has previous_score_id)
+				if task.GetString("previous_score_id") != "" {
+					return re.Next()
+				}
+
+				// Trigger async evaluation (don't block task save)
+				go func(taskCopy *core.Record) {
+					ctx := context.Background()
+
+					d.logger.Info("Auto-evaluating completed task",
+						"task_id", taskCopy.Id,
+						"title", taskCopy.GetString("title"))
+
+					// Evaluate task quality
+					scorecard, err := d.vibeEvaluator.EvaluateTask(
+						ctx,
+						taskCopy.Id,
+						taskCopy.GetString("title"),
+						taskCopy.GetString("stdout_log"), // Use stdout as result
+						taskCopy.GetInt("retry_count"),
+						taskCopy.GetString("previous_score_id"),
+					)
+					if err != nil {
+						d.logger.Error("Auto-evaluation failed",
+							"task_id", taskCopy.Id,
+							"error", err)
+						return
+					}
+
+					// Save scorecard
+					collection, err := d.pb.FindCollectionByNameOrId("vibescore")
+					if err != nil {
+						d.logger.Error("Vibescore collection not found", "error", err)
+						return
+					}
+
+					record := core.NewRecord(collection)
+					record.Set("task_id", scorecard.TaskID)
+					record.Set("correctness", scorecard.Correctness)
+					record.Set("efficiency", scorecard.Efficiency)
+					record.Set("maintainability", scorecard.Maintainability)
+					record.Set("security", scorecard.Security)
+					record.Set("overall_score", scorecard.OverallScore)
+					record.Set("evaluator", scorecard.Evaluator)
+					record.Set("evaluator_model", scorecard.EvaluatorModel)
+					record.Set("evaluated_at", scorecard.EvaluatedAt)
+					record.Set("correctness_feedback", scorecard.CorrectnessFeedback)
+					record.Set("efficiency_feedback", scorecard.EfficiencyFeedback)
+					record.Set("maintainability_feedback", scorecard.MaintainabilityFeedback)
+					record.Set("security_feedback", scorecard.SecurityFeedback)
+					record.Set("summary_feedback", scorecard.SummaryFeedback)
+					record.Set("improvement_suggestions", scorecard.ImprovementSuggestions)
+					record.Set("status", string(scorecard.Status))
+					record.Set("quality_threshold", scorecard.QualityThreshold)
+					record.Set("retry_count", scorecard.RetryCount)
+					record.Set("previous_score_id", scorecard.PreviousScoreID)
+
+					if err := d.pb.Save(record); err != nil {
+						d.logger.Error("Failed to save auto-evaluation scorecard",
+							"task_id", taskCopy.Id,
+							"error", err)
+						return
+					}
+
+					d.logger.Info("Auto-evaluation completed",
+						"task_id", taskCopy.Id,
+						"overall_score", scorecard.OverallScore,
+						"status", scorecard.Status,
+						"scorecard_id", record.Id)
+
+					// TODO Phase 2: If failed and retry_count < max, trigger retry with feedback
+				}(task.Clone())
+			}
+
+			return re.Next()
+		})
+
+		d.logger.Info("Vibe Scorecard system started successfully")
+		return e.Next()
+	})
+}
+
+// vibeScoreLLMBackend wraps llm.Backend to implement vibescore.LLMBackend interface
+type vibeScoreLLMBackend struct {
+	backend     llm.Backend
+	costTracker *costtracker.Tracker
+	logger      *slog.Logger
+}
+
+func (v *vibeScoreLLMBackend) Execute(ctx context.Context, prompt string, opts interface{}) (*vibescore.LLMResponse, error) {
+	// Convert opts to llm.Options
+	llmOpts := &llm.Options{}
+	if opts != nil {
+		if typedOpts, ok := opts.(*llm.Options); ok {
+			llmOpts = typedOpts
+		}
+	}
+
+	// Execute LLM backend
+	resp, err := v.backend.Execute(ctx, prompt, llmOpts)
+	if err != nil {
+		return nil, err
+	}
+
+	// Record cost if tracker is available
+	if v.costTracker != nil {
+		if err := v.costTracker.RecordCost(
+			ctx,
+			"vibescore-evaluator",
+			resp.Model,
+			"",
+			resp.InputTokens,
+			resp.OutputTokens,
+			resp.CostUSD,
+		); err != nil {
+			v.logger.Debug("Failed to record cost for vibe scorecard", "error", err)
+		}
+	}
+
+	// Convert to vibescore.LLMResponse
+	return &vibescore.LLMResponse{
+		Content:      resp.Content,
+		Model:        resp.Model,
+		InputTokens:  resp.InputTokens,
+		OutputTokens: resp.OutputTokens,
+		CostUSD:      resp.CostUSD,
+		Latency:      resp.Latency,
+	}, nil
+}
+
+func (v *vibeScoreLLMBackend) Name() string {
+	return "claude"
 }

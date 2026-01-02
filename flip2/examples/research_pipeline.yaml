@@ -1,0 +1,307 @@
+# Multi-stage Research and Analysis Pipeline
+# This pipeline demonstrates a typical research workflow:
+# 1. Gather information (Gemini - fast for data collection)
+# 2. Analyze findings (Claude - strong reasoning)
+# 3. Synthesize insights (Claude - cross-reference analysis)
+# 4. Format report (Claude - professional output)
+
+name: research_pipeline
+description: "Multi-stage research pipeline for gathering, analyzing, and synthesizing information"
+version: "1.0"
+
+# Maximum retries across the entire pipeline
+max_retries: 3
+
+# Global timeout for the entire pipeline (0 = no limit)
+global_timeout: "2h"
+
+# Variables that can be substituted in stage commands
+variables:
+  research_domain: "artificial intelligence"
+  depth_level: "comprehensive"
+  output_format: "markdown"
+
+# Stage-independent settings
+on_failure: "checkpoint"  # Create checkpoint on failure for recovery
+
+# Pipeline-level metadata for tracking and organization
+metadata:
+  author: "coordinator"
+  team: "research"
+  priority: "high"
+  tags:
+    - research
+    - multi-agent
+    - experimental
+  min_quality_score: 0.8
+
+# ============================================================================
+# STAGES
+# ============================================================================
+
+stages:
+  # Stage 1: Gather Information
+  # Uses Gemini for fast data collection and synthesis
+  - id: gather
+    name: "Gather Information"
+    description: "Research {{research_domain}} using web search and synthesis"
+    backend: gemini
+    model: "gemini-2.5-pro"
+
+    # The main task/prompt for this stage
+    command: |
+      Research the topic: {{research_domain}}
+
+      Requirements:
+      - Search for recent publications and news
+      - Collect diverse perspectives
+      - Find credible sources
+      - Depth level: {{depth_level}}
+      - Return results as structured JSON with sources
+
+    # Output configuration
+    output:
+      name: "raw_research_data"
+      type: "json"
+      persist: true
+
+    # Timeout for this stage
+    timeout: "15m"
+
+    # Number of retries for this stage
+    retries: 2
+
+    metadata:
+      cost_estimate_usd: 0.05
+      estimated_duration_sec: 300
+      quality_metric: "source_diversity"
+
+  # Stage 2: Initial Analysis
+  # Uses Claude to analyze and structure the gathered data
+  - id: analyze
+    name: "Initial Analysis"
+    description: "Analyze and structure the gathered research data"
+    backend: claude
+    model: "claude-opus-4-5"
+
+    command: |
+      Analyze the following research data:
+      {{gather.output}}
+
+      Requirements:
+      - Identify key themes and patterns
+      - Evaluate source credibility
+      - Extract critical insights
+      - Organize by relevance
+      - Format as structured JSON with categories
+
+    # Get input from the previous stage
+    input:
+      type: "previous_stage"
+      source: "gather"
+      path: null  # Use entire output
+
+    # Output configuration
+    output:
+      name: "initial_analysis"
+      type: "json"
+      persist: true
+
+    # This stage depends on gather being complete
+    depends_on:
+      - gather
+
+    timeout: "10m"
+    retries: 1
+
+    metadata:
+      cost_estimate_usd: 0.08
+      estimated_duration_sec: 180
+      requires_expert_review: false
+
+  # Stage 3: Deepen Analysis
+  # Runs in parallel with synthesis, then feeds into the final stage
+  - id: deepen_analysis
+    name: "Deepen Analysis"
+    description: "Perform deeper analysis and identify gaps"
+    backend: claude
+    model: "claude-opus-4-5"
+
+    command: |
+      Deepen the analysis of this research:
+      {{analyze.output}}
+
+      Requirements:
+      - Identify knowledge gaps
+      - Suggest additional areas for research
+      - Evaluate counterarguments
+      - Assess validity of key claims
+      - Provide confidence scores
+
+    input:
+      type: "previous_stage"
+      source: "analyze"
+
+    output:
+      name: "deep_analysis"
+      type: "json"
+      persist: true
+
+    depends_on:
+      - analyze
+
+    timeout: "12m"
+    retries: 1
+
+    metadata:
+      cost_estimate_usd: 0.08
+      estimated_duration_sec: 200
+
+  # Stage 4: Cross-Reference Analysis
+  # Parallel with deepen_analysis
+  - id: cross_reference
+    name: "Cross-Reference Analysis"
+    description: "Cross-reference findings with known data"
+    backend: claude
+    model: "claude-opus-4-5"
+
+    command: |
+      Cross-reference these findings:
+      {{analyze.output}}
+
+      Requirements:
+      - Compare with established knowledge
+      - Identify novel insights
+      - Flag contradictions
+      - Rate consistency of findings
+      - Suggest validation methods
+
+    input:
+      type: "previous_stage"
+      source: "analyze"
+
+    output:
+      name: "cross_reference_results"
+      type: "json"
+      persist: true
+
+    depends_on:
+      - analyze
+
+    timeout: "12m"
+    retries: 1
+
+    metadata:
+      cost_estimate_usd: 0.08
+      estimated_duration_sec: 200
+
+  # Stage 5: Synthesize Insights
+  # Combines both deepen and cross-reference results
+  - id: synthesize
+    name: "Synthesize Insights"
+    description: "Combine all analyses into comprehensive insights"
+    backend: claude
+    model: "claude-opus-4-5"
+
+    command: |
+      Synthesize comprehensive insights from these analyses:
+
+      Initial Analysis:
+      {{analyze.output}}
+
+      Deep Analysis:
+      {{deepen_analysis.output}}
+
+      Cross-Reference Results:
+      {{cross_reference.output}}
+
+      Requirements:
+      - Create unified narrative
+      - Highlight most important findings
+      - Identify actionable insights
+      - Assess overall research quality
+      - Suggest next steps
+
+    # This stage depends on multiple previous stages
+    depends_on:
+      - deepen_analysis
+      - cross_reference
+
+    output:
+      name: "synthesized_insights"
+      type: "json"
+      persist: true
+
+    timeout: "15m"
+    retries: 1
+
+    metadata:
+      cost_estimate_usd: 0.10
+      estimated_duration_sec: 300
+
+  # Stage 6: Format Report
+  # Final stage - generates the polished output
+  - id: format_report
+    name: "Format Report"
+    description: "Format final research report in {{output_format}}"
+    backend: claude
+    model: "claude-opus-4-5"
+
+    command: |
+      Format a professional research report from these insights:
+      {{synthesize.output}}
+
+      Requirements:
+      - Format: {{output_format}}
+      - Include executive summary
+      - Detailed findings sections
+      - Methodology description
+      - Conclusions and recommendations
+      - Proper citations and references
+      - Professional layout and styling
+
+    input:
+      type: "previous_stage"
+      source: "synthesize"
+
+    output:
+      name: "final_report"
+      type: "text"
+      persist: true
+
+    depends_on:
+      - synthesize
+
+    timeout: "10m"
+    retries: 1
+
+    metadata:
+      cost_estimate_usd: 0.08
+      estimated_duration_sec: 180
+      is_final_output: true
+
+# ============================================================================
+# PIPELINE EXECUTION NOTES
+# ============================================================================
+#
+# EXECUTION FLOW:
+# 1. gather (0-15min) - Parallel with nothing
+# 2. analyze (0-10min) - Starts after gather
+# 3. deepen_analysis (0-12min) - Starts after analyze
+#    cross_reference (0-12min) - Starts after analyze (parallel with deepen)
+# 4. synthesize (0-15min) - Starts after both deepen and cross_reference
+# 5. format_report (0-10min) - Final stage
+#
+# TOTAL ESTIMATED TIME: ~62 minutes (sequential) or ~52 minutes (with parallelism)
+# ESTIMATED COST: $0.47 USD (5 Claude calls + 1 Gemini call)
+#
+# FAILURE RECOVERY:
+# - Each stage can be retried individually
+# - Checkpoints created after each stage
+# - On failure, system can resume from last checkpoint
+#
+# EXTENSIBILITY:
+# - Add more parallel analysis stages before synthesize
+# - Replace Gemini with different backend for gather
+# - Adjust timeouts based on actual performance
+# - Add conditional skips for optional stages

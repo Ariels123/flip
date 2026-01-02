@@ -5,9 +5,18 @@ import (
 )
 
 func TestFuzzyMatchAgent_ExactMatch(t *testing.T) {
-	monitor := &Monitor{
-		config: Config{Threshold: 0.75},
+	// Convert global ValidAgents map back to slice for config
+	var validAgents []string
+	for agent := range ValidAgents {
+		validAgents = append(validAgents, agent)
 	}
+
+	config := Config{
+		Threshold:       0.75,
+		ValidAgents:     validAgents,
+		TypoCorrections: TypoCorrections,
+	}
+	monitor := New(nil, config, nil)
 
 	// Note: Claud-win uses Capital C per Windows sync (SYNC-STATUS-1766055837)
 	tests := []struct {
@@ -32,9 +41,18 @@ func TestFuzzyMatchAgent_ExactMatch(t *testing.T) {
 }
 
 func TestFuzzyMatchAgent_CaseInsensitive(t *testing.T) {
-	monitor := &Monitor{
-		config: Config{Threshold: 0.75},
+	// Convert global ValidAgents map back to slice for config
+	var validAgents []string
+	for agent := range ValidAgents {
+		validAgents = append(validAgents, agent)
 	}
+
+	config := Config{
+		Threshold:       0.75,
+		ValidAgents:     validAgents,
+		TypoCorrections: TypoCorrections,
+	}
+	monitor := New(nil, config, nil)
 
 	// Note: Claud-win uses Capital C per Windows sync (SYNC-STATUS-1766055837)
 	tests := []struct {
@@ -60,9 +78,18 @@ func TestFuzzyMatchAgent_CaseInsensitive(t *testing.T) {
 }
 
 func TestFuzzyMatchAgent_TypoCorrections(t *testing.T) {
-	monitor := &Monitor{
-		config: Config{Threshold: 0.75},
+	// Convert global ValidAgents map back to slice for config
+	var validAgents []string
+	for agent := range ValidAgents {
+		validAgents = append(validAgents, agent)
 	}
+
+	config := Config{
+		Threshold:       0.75,
+		ValidAgents:     validAgents,
+		TypoCorrections: TypoCorrections,
+	}
+	monitor := New(nil, config, nil)
 
 	// Note: Claud-win uses Capital C per Windows sync (SYNC-STATUS-1766055837)
 	tests := []struct {
@@ -95,9 +122,18 @@ func TestFuzzyMatchAgent_TypoCorrections(t *testing.T) {
 }
 
 func TestFuzzyMatchAgent_FuzzyMatch(t *testing.T) {
-	monitor := &Monitor{
-		config: Config{Threshold: 0.75},
+	// Convert global ValidAgents map back to slice for config
+	var validAgents []string
+	for agent := range ValidAgents {
+		validAgents = append(validAgents, agent)
 	}
+
+	config := Config{
+		Threshold:       0.75,
+		ValidAgents:     validAgents,
+		TypoCorrections: TypoCorrections,
+	}
+	monitor := New(nil, config, nil)
 
 	// Note: Claud-win uses Capital C per Windows sync (SYNC-STATUS-1766055837)
 	tests := []struct {
@@ -120,9 +156,18 @@ func TestFuzzyMatchAgent_FuzzyMatch(t *testing.T) {
 }
 
 func TestFuzzyMatchAgent_NoMatch(t *testing.T) {
-	monitor := &Monitor{
-		config: Config{Threshold: 0.75},
+	// Convert global ValidAgents map back to slice for config
+	var validAgents []string
+	for agent := range ValidAgents {
+		validAgents = append(validAgents, agent)
 	}
+
+	config := Config{
+		Threshold:       0.75,
+		ValidAgents:     validAgents,
+		TypoCorrections: TypoCorrections,
+	}
+	monitor := New(nil, config, nil)
 
 	tests := []string{
 		"completely-unknown",
@@ -238,9 +283,18 @@ func TestTypoCorrections(t *testing.T) {
 }
 
 func BenchmarkFuzzyMatchAgent(b *testing.B) {
-	monitor := &Monitor{
-		config: Config{Threshold: 0.75},
+	// Convert global ValidAgents map back to slice for config
+	var validAgents []string
+	for agent := range ValidAgents {
+		validAgents = append(validAgents, agent)
 	}
+
+	config := Config{
+		Threshold:       0.75,
+		ValidAgents:     validAgents,
+		TypoCorrections: TypoCorrections,
+	}
+	monitor := New(nil, config, nil)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

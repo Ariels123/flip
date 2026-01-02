@@ -60,7 +60,7 @@ func (p *PBMetricProvider) GetErrorRatePercent(ctx context.Context) (float64, er
 
 	// Calculate time range (last hour)
 	oneHourAgo := time.Now().Add(-1 * time.Hour)
-	timeFilter := fmt.Sprintf("created >= '%s'", oneHourAgo.Format(time.RFC3339))
+	timeFilter := fmt.Sprintf("@created >= '%s'", oneHourAgo.Format(time.RFC3339))
 
 	// Count total signals in last hour
 	totalRecords, err := p.app.FindRecordsByFilter(
@@ -80,7 +80,7 @@ func (p *PBMetricProvider) GetErrorRatePercent(ctx context.Context) (float64, er
 	}
 
 	// Count error signals in last hour
-	errorFilter := fmt.Sprintf("created >= '%s' && level = 'error'", oneHourAgo.Format(time.RFC3339))
+	errorFilter := fmt.Sprintf("@created >= '%s' && level = 'error'", oneHourAgo.Format(time.RFC3339))
 	errorRecords, err := p.app.FindRecordsByFilter(
 		collection.Id,
 		errorFilter,
@@ -114,7 +114,7 @@ func (p *PBMetricProvider) GetSyncFailedCount1H(ctx context.Context) (int, error
 
 	// Count failed syncs in last hour
 	oneHourAgo := time.Now().Add(-1 * time.Hour)
-	filter := fmt.Sprintf("created >= '%s' && status = 'failed'", oneHourAgo.Format(time.RFC3339))
+	filter := fmt.Sprintf("@created >= '%s' && status = 'failed'", oneHourAgo.Format(time.RFC3339))
 
 	records, err := p.app.FindRecordsByFilter(
 		collection.Id,
