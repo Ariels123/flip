@@ -5,8 +5,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -19,13 +21,15 @@ type Client struct {
 	APIKey    string
 	AuthToken string
 
-	clientID   string
-	events     chan *SignalEvent
-	tasks      chan *TaskEvent
-	stop       chan struct{}
-	httpClient *http.Client
-	logger     *slog.Logger
-	wg         sync.WaitGroup // Tracks connection goroutine lifecycle
+	clientID     string
+	events       chan *SignalEvent
+	tasks        chan *TaskEvent
+	stop         chan struct{}
+	httpClient   *http.Client
+	logger       *slog.Logger
+	wg           sync.WaitGroup // Tracks connection goroutine lifecycle
+	lastEventID  string         // Distributed Execution V2: Track last SSE event ID for resiliency
+	eventIDMutex sync.RWMutex   // Protects lastEventID
 }
 
 type SignalEvent struct {
@@ -126,12 +130,22 @@ func (c *Client) connectOnce() error {
 	req.Header.Set("Accept", "text/event-stream")
 	c.setAuthHeaders(req)
 
+	// Distributed Execution V2: Include Last-Event-ID header for resiliency
+	// This allows the server to replay missed events after a reconnection
+	c.eventIDMutex.RLock()
+	lastID := c.lastEventID
+	c.eventIDMutex.RUnlock()
+	if lastID != "" {
+		req.Header.Set("Last-Event-ID", lastID)
+		c.logger.Debug("Reconnecting with Last-Event-ID", "id", lastID)
+	}
+
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("sse connection failed: %s", resp.Status)
 	}
@@ -145,23 +159,29 @@ func (c *Client) connectOnce() error {
 			return err
 		}
 		line = strings.TrimSpace(line)
-		
+
 		if line == "" {
 			// End of event
 			if len(currentEvent.Data) > 0 {
+				// Distributed Execution V2: Store the event ID for resiliency
+				if currentEvent.ID != "" {
+					c.eventIDMutex.Lock()
+					c.lastEventID = currentEvent.ID
+					c.eventIDMutex.Unlock()
+				}
 				c.handleEvent(currentEvent)
 			}
 			currentEvent = sseEvent{}
 			continue
 		}
-		
+
 		parts := strings.SplitN(line, ":", 2)
 		if len(parts) != 2 {
 			continue
 		}
 		key := strings.TrimSpace(parts[0])
 		val := strings.TrimSpace(parts[1])
-		
+
 		switch key {
 		case "id":
 			currentEvent.ID = val
@@ -171,6 +191,13 @@ func (c *Client) connectOnce() error {
 			currentEvent.Data = []byte(val)
 		}
 	}
+}
+
+// GetLastEventID returns the last processed SSE event ID (for diagnostics)
+func (c *Client) GetLastEventID() string {
+	c.eventIDMutex.RLock()
+	defer c.eventIDMutex.RUnlock()
+	return c.lastEventID
 }
 
 func (c *Client) handleEvent(evt sseEvent) {
@@ -320,6 +347,218 @@ func (c *Client) UpdateSignal(signalID string, data map[string]interface{}) erro
 		return fmt.Errorf("api error: %s", resp.Status)
 	}
 	return nil
+}
+
+// ListTasks lists tasks with optional filter
+func (c *Client) ListTasks(filter string) ([]TaskRecord, error) {
+	url := fmt.Sprintf("%s/api/collections/tasks/records?filter=%s", c.BaseURL, url.QueryEscape(filter))
+	req, _ := http.NewRequest("GET", url, nil)
+	c.setAuthHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("api error: %s", resp.Status)
+	}
+
+	var result struct {
+		Items []TaskRecord `json:"items"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	return result.Items, nil
+}
+
+// CountTasks returns the count of tasks matching the given filter.
+func (c *Client) CountTasks(filter string) (int64, error) {
+	url := fmt.Sprintf("%s/api/collections/tasks/records?filter=%s&perPage=1", c.BaseURL, url.QueryEscape(filter))
+	req, _ := http.NewRequest("GET", url, nil)
+	c.setAuthHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return 0, fmt.Errorf("API error: %s %s", resp.Status, string(body))
+	}
+
+	var result struct {
+		TotalItems int64 `json:"totalItems"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return 0, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return result.TotalItems, nil
+}
+
+// GetTask fetches a single task by ID
+func (c *Client) GetTask(taskID string) (map[string]interface{}, error) {
+	req, _ := http.NewRequest("GET",
+		fmt.Sprintf("%s/api/collections/tasks/records/%s", c.BaseURL, taskID),
+		nil)
+	c.setAuthHeaders(req)
+
+	c.logger.Debug("Fetching task", "task_id", taskID, "url", req.URL.String())
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch task: %w", err)
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	c.logger.Debug("GetTask response", "status", resp.Status, "body", string(bodyBytes))
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("fetch task failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	var task map[string]interface{}
+	if err := json.NewDecoder(bytes.NewReader(bodyBytes)).Decode(&task); err != nil {
+		return nil, fmt.Errorf("failed to decode task: %w", err)
+	}
+
+	return task, nil
+}
+
+// Helper to log map keys
+func getKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+// GetAgent fetches a single agent by agent_id (name)
+func (c *Client) GetAgent(agentID string) (map[string]interface{}, error) {
+	// Query by agent_id field, not record ID
+	filter := fmt.Sprintf("agent_id='%s'", agentID)
+	req, _ := http.NewRequest("GET",
+		fmt.Sprintf("%s/api/collections/agents/records?filter=%s", c.BaseURL, url.QueryEscape(filter)),
+		nil)
+	c.setAuthHeaders(req)
+
+	c.logger.Debug("Fetching agent", "agent_id", agentID, "url", req.URL.String())
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch agent: %w", err)
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	c.logger.Debug("GetAgent response", "status", resp.Status, "body", string(bodyBytes))
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("fetch agent failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	var result struct {
+		Items []map[string]interface{} `json:"items"`
+	}
+	if err := json.NewDecoder(bytes.NewReader(bodyBytes)).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode agent: %w", err)
+	}
+
+	if len(result.Items) == 0 {
+		return nil, fmt.Errorf("agent not found: %s", agentID)
+	}
+
+	return result.Items[0], nil
+}
+
+
+// ClaimTaskAtomic attempts to atomically claim a task using database-level atomic operations.
+// This prevents race conditions where multiple agents try to claim the same task.
+// Returns true if the claim was successful, false if another agent claimed it first.
+//
+// P0 Fix #2: Uses the /api/tasks/:id/claim endpoint which performs an atomic UPDATE
+// with a WHERE clause at the database level, eliminating the race condition.
+//
+// Tier 1 Enhancement: Checks role compatibility before claiming. If the task has a required_role,
+// the agent must have a matching role to claim it.
+func (c *Client) ClaimTaskAtomic(taskID, agentID, agentName string) (bool, error) {
+	// Role checking re-enabled after fixing "updated_at" bug
+	
+	// First, fetch the task to check required_role
+	task, err := c.GetTask(taskID)
+	if err != nil {
+		return false, fmt.Errorf("failed to fetch task for role check: %w", err)
+	}
+
+	// If task has a required role, verify agent compatibility
+	if requiredRole, ok := task["required_role"].(string); ok && requiredRole != "" {
+		// Fetch agent's role
+		agent, err := c.GetAgent(agentName)
+		if err != nil {
+			return false, fmt.Errorf("failed to fetch agent role: %w", err)
+		}
+
+		// Check metadata.role first (preferred), then root level role
+		var agentRole string
+		if metadata, ok := agent["metadata"].(map[string]interface{}); ok {
+			if r, ok := metadata["role"].(string); ok {
+				agentRole = r
+			}
+		}
+		if agentRole == "" {
+			agentRole, _ = agent["role"].(string)
+		}
+
+		if agentRole != requiredRole {
+			c.logger.Info("Role mismatch, skipping claim",
+				"task_id", taskID,
+				"required_role", requiredRole,
+				"agent_role", agentRole,
+				"agent_name", agentName)
+			return false, nil // Not an error, just incompatible
+		}
+	}
+	
+	// Proceed with atomic claim
+	data := map[string]interface{}{
+		"agent_id": agentID,
+	}
+	jsonData, _ := json.Marshal(data)
+
+	req, _ := http.NewRequest("POST",
+		fmt.Sprintf("%s/api/tasks/%s/claim", c.BaseURL, taskID),
+		bytes.NewBuffer(jsonData))
+	req.Header.Set("Content-Type", "application/json")
+	c.setAuthHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("failed to claim task: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Check response status
+	if resp.StatusCode == http.StatusOK {
+		c.logger.Info("Task claimed successfully", "task_id", taskID, "agent", agentID)
+		return true, nil
+	}
+
+	if resp.StatusCode == http.StatusConflict {
+		// Task was already claimed by another agent
+		c.logger.Debug("Task already claimed by another agent", "task_id", taskID)
+		return false, nil
+	}
+
+	// Other error occurred
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	return false, fmt.Errorf("claim failed with status %d: %s", resp.StatusCode, string(bodyBytes))
 }
 
 // Close stops the SSE connection and cleans up resources
