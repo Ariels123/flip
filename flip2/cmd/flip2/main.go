@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"flip2/internal/auth"
+	"flip2/internal/budget"
 	"flip2/internal/config"
 	"flip2/internal/migrate"
 	"flip2/internal/repl"
@@ -179,7 +180,8 @@ func main() {
 	rootCmd.AddCommand(agentCmd())
 
 	// Session commands
-	rootCmd.AddCommand(sessionCmd())
+	// sessionCmd() is undefined in this file
+	// rootCmd.AddCommand(sessionCmd())
 
 	// Auth commands
 	rootCmd.AddCommand(authCmd())
@@ -198,6 +200,9 @@ func main() {
 
 	// Routing command (analytics and dashboards)
 	rootCmd.AddCommand(routingCmd())
+
+	// Budget commands
+	rootCmd.AddCommand(budgetCmd())
 
 	// Version command (collaborative feature with Gemini via FLIP2!)
 	rootCmd.AddCommand(versionCmd())
@@ -1802,6 +1807,28 @@ func spawnAgent(roleName, task string) {
 		return
 	}
 
+	// Create budget if specified
+	if spawnInfo.CostBudget > 0 {
+		budgetData := map[string]interface{}{
+			"name":         fmt.Sprintf("Budget for %s", spawnInfo.AgentID),
+			"scope":        string(budget.ScopeAgent),
+			"scope_id":     spawnInfo.AgentID,
+			"limit_usd":    spawnInfo.CostBudget,
+			"reset_period": string(budget.ResetDaily),
+			"warning_pct":  80.0,
+			"consumed_usd": 0.0,
+			"status":       string(budget.StatusActive),
+			"last_reset_at": time.Now(),
+			"next_reset_at": time.Now().Add(24 * time.Hour), // Simple 24h for now
+			"enabled":      true,
+		}
+		if err := createRecord("budgets", budgetData); err != nil {
+			logger.Info("Warning: Failed to create budget for agent", "error", err)
+		} else {
+			logger.Info("Budget created for agent", "limit", spawnInfo.CostBudget)
+		}
+	}
+
 	// Display success message with agent details
 	logger.Info("Worker agent spawned successfully",
 		"agent_id", spawnInfo.AgentID,
@@ -1845,12 +1872,14 @@ func getSpawnInfo(roleName, task string) (*SpawnInfoDisplay, error) {
 			"description": "Fast, cost-effective code implementation using Gemini Flash",
 			"model":       "gemini-2.5-flash",
 			"max_tokens":  "8192",
+			"cost_budget": "5.00",
 		},
 		"haiku-worker": {
 			"name":        "haiku-worker",
 			"description": "Lightweight code implementation baseline with Claude Haiku",
 			"model":       "claude-haiku-4",
 			"max_tokens":  "8192",
+			"cost_budget": "2.00",
 		},
 	}
 
@@ -1878,22 +1907,29 @@ func getSpawnInfo(roleName, task string) (*SpawnInfoDisplay, error) {
 		}
 	}
 
+	costBudget := 0.0
+	if cb, ok := roleData["cost_budget"]; ok {
+		fmt.Sscanf(cb, "%f", &costBudget)
+	}
+
 	return &SpawnInfoDisplay{
-		AgentID:   agentID,
-		RoleName:  roleName,
-		Model:     roleData["model"],
-		MaxTokens: maxTokens,
-		Task:      task,
+		AgentID:    agentID,
+		RoleName:   roleName,
+		Model:      roleData["model"],
+		MaxTokens:  maxTokens,
+		CostBudget: costBudget,
+		Task:       task,
 	}, nil
 }
 
 // SpawnInfoDisplay contains display information about a spawned agent
 type SpawnInfoDisplay struct {
-	AgentID   string
-	RoleName  string
-	Model     string
-	MaxTokens int
-	Task      string
+	AgentID    string
+	RoleName   string
+	Model      string
+	MaxTokens  int
+	CostBudget float64
+	Task       string
 
 	// Add fields needed for the agent record
 	SystemPrompt string

@@ -49,7 +49,7 @@ func TestAttachSessionRestoreState(t *testing.T) {
 	}
 
 	// Setup test database
-	db := setupTestDB(t)
+	db := setupIntegrationDB(t)
 	defer teardownTestDB(t, db)
 
 	// Create and save a session
@@ -147,7 +147,7 @@ func TestAttachSessionStatusTransition(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	db := setupTestDB(t)
+	db := setupIntegrationDB(t)
 	defer teardownTestDB(t, db)
 
 	// Create a paused session
@@ -219,7 +219,7 @@ func TestAttachSessionTerminalState(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	db := setupTestDB(t)
+	db := setupIntegrationDB(t)
 	defer teardownTestDB(t, db)
 
 	// Create a completed session (terminal state)
@@ -253,7 +253,7 @@ func TestAttachSessionWithAgents(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	db := setupTestDB(t)
+	db := setupIntegrationDB(t)
 	defer teardownTestDB(t, db)
 
 	// Create session with agents
@@ -319,7 +319,7 @@ func TestAttachSessionHeartbeat(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	db := setupTestDB(t)
+	db := setupIntegrationDB(t)
 	defer teardownTestDB(t, db)
 
 	// Create a paused session without recent heartbeat
@@ -363,7 +363,7 @@ func TestAttachSessionMultipleCoordinators(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	db := setupTestDB(t)
+	db := setupIntegrationDB(t)
 	defer teardownTestDB(t, db)
 
 	// Create sessions for different coordinators
@@ -410,7 +410,7 @@ func TestAttachSessionWithMessages(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	db := setupTestDB(t)
+	db := setupIntegrationDB(t)
 	defer teardownTestDB(t, db)
 
 	// Create session with messages

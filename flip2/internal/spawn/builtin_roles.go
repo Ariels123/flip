@@ -161,6 +161,7 @@ When submitting code, include:
 		},
 		Model:     "gemini-2.5-flash",
 		MaxTokens: 8192,
+		CostBudget: 5.00, // $5.00/hour default budget for Gemini Flash workers
 	}
 }
 
@@ -202,6 +203,7 @@ When submitting code, include:
 		},
 		Model:     "claude-haiku-4",
 		MaxTokens: 8192,
+		CostBudget: 2.00, // $2.00/hour default budget for Haiku workers
 	}
 }
 

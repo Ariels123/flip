@@ -21,6 +21,7 @@ import (
 	"flip2/internal/api"
 	"flip2/internal/archiver"
 	"flip2/internal/auth"
+	"flip2/internal/budget"
 	"flip2/internal/codereview"
 	"flip2/internal/commmonitor"
 	"flip2/internal/config"
@@ -30,9 +31,12 @@ import (
 	"flip2/internal/logger"
 	"flip2/internal/queue"
 	"flip2/internal/scheduler"
+	"flip2/internal/session"
 	"flip2/internal/supervisor"
 	"flip2/internal/sync"
 	"flip2/internal/vibescore"
+	"flip2/internal/recovery"
+	"flip2/internal/websocket"
 
 	_ "flip2/pb_migrations" // Import migrations to trigger init()
 
@@ -69,6 +73,12 @@ type Daemon struct {
 	supervisor     *supervisor.Supervisor
 	// Cost tracker for LLM API costs
 	costTracker    *costtracker.Tracker
+	// Budget tracker
+	budgetTracker  *budget.Tracker
+	// Session management
+	sessionManager      *session.SessionManager
+	reconnectionManager *session.ReconnectionManager
+	sessionCleanup      *session.CleanupScheduler
 	// Alerting system
 	alertManager   *alerts.Manager
 	alertEvaluator *alerts.Evaluator
@@ -76,6 +86,9 @@ type Daemon struct {
 	codeReviewService *codereview.Service
 	// Vibe Scorecard quality evaluation system
 	vibeEvaluator *vibescore.Evaluator
+	// WebSocket components
+	wsHub     *websocket.Hub
+	wsHandler *websocket.Handler
 }
 
 // New creates a new Daemon instance
@@ -287,6 +300,10 @@ func (d *Daemon) Shutdown() error {
 		d.msgArchiver.Stop()
 	}
 
+	if d.sessionCleanup != nil {
+		d.sessionCleanup.Stop()
+	}
+
 	// PocketBase doesn't expose a Clean Stop method easily from outside,
 	// but mostly we just need to ensure our components stop.
 	return nil
@@ -313,6 +330,12 @@ func (d *Daemon) registerHooks() {
 		if status == "in_progress" && assignee != "" {
 			d.executor.QueueTask(e.Record.Id)
 		}
+
+		// Broadcast update via WebSocket
+		if d.wsHub != nil {
+			d.wsHub.BroadcastTaskUpdate(e.Record)
+		}
+
 		return nil
 	})
 
@@ -599,12 +622,12 @@ func (d *Daemon) registerHooks() {
 
 	// Register Daemon Agent on Startup
 	d.pb.OnServe().BindFunc(func(e *core.ServeEvent) error {
-		go func() {
+		recovery.SafelyGo(d.logger, "Daemon Agent Registration", func() {
 			// Give server a moment to start
 			time.Sleep(1 * time.Second)
 			
-			// Use fixed shorter ID
-			daemonID := "daemon_svc_01"
+			// Use fixed 15-character ID to satisfy PocketBase constraints
+			daemonID := "daemon_svc_0001"
 			hostname, _ := os.Hostname()
 			agentID := fmt.Sprintf("daemon-%s", hostname)
 			// Truncate agentID if needed, but ID field is the critical one for length.
@@ -622,8 +645,8 @@ func (d *Daemon) registerHooks() {
 				agent.Set("id", daemonID)
 				agent.Set("agent_id", agentID)
 				agent.Set("status", "online")
-				// Use 'local' for backend/mode to avoid validation errors
-				agent.Set("backend", "local") 
+				// Use 'custom' for backend to satisfy select constraint ["claude","gemini","antigravity","custom"]
+				agent.Set("backend", "custom") 
 				agent.Set("mode", "local")
 				agent.Set("last_seen", time.Now())
 				if d.currentLogPath != "" {
@@ -646,17 +669,35 @@ func (d *Daemon) registerHooks() {
 					d.logger.Error("Failed to update daemon agent", "error", err)
 				}
 			}
-		}()
+		})
 		return e.Next()
 	})
 }
 
 
 func (d *Daemon) registerJobs() {
+	// Task Executor Job - Polls for pending tasks every 30s (from config)
+	if jobCfg, ok := d.config.Flip2.Scheduler.Jobs["task-executor"]; ok && jobCfg.Enabled {
+		d.scheduler.RegisterJob("task-executor", jobCfg.Cron, func(ctx context.Context) error {
+			recovery.SafelyGo(d.logger, "Task Executor Job", func() {
+				d.executor.QueuePendingTasks()
+			})
+			return nil
+		})
+	}
+
 	// Health check job
 	d.scheduler.RegisterJob("health-check", "0 */1 * * * *", func(ctx context.Context) error {
 		d.logger.Info("Health check: OK")
 		// TODO: write to events?
+		return nil
+	})
+
+	// Budget Reset Job - Hourly check
+	d.scheduler.RegisterJob("budget-reset-check", "0 0 * * * *", func(ctx context.Context) error {
+		if d.budgetTracker != nil {
+			return d.budgetTracker.CheckAndResetBudgets(ctx)
+		}
 		return nil
 	})
 	
@@ -1596,6 +1637,52 @@ func (d *Daemon) initializeFLIP2API() {
 	d.costTracker = costtracker.New(costStore, d.logger)
 	d.logger.Info("Cost Tracker initialized")
 
+	// Initialize Budget Tracker
+	budgetStore := budget.NewPBStore(d.pb)
+	d.budgetTracker = budget.New(budgetStore, d.logger)
+	d.logger.Info("Budget Tracker initialized")
+
+	// Initialize Session Manager
+	d.sessionManager = session.NewSessionManager(d.pb, d.logger)
+
+	// Initialize Reconnection Manager
+	d.reconnectionManager = session.NewReconnectionManager(
+		session.DefaultReconnectionConfig(),
+		d.pb,
+		d.sessionManager,
+		d.logger,
+	)
+	d.logger.Info("Session and Reconnection Managers initialized")
+
+	// Initialize Session Cleanup
+	if d.config.Flip2.SessionCleanup.Enabled {
+		cleanupConfig := &session.CleanupConfig{
+			StaleThreshold:      d.config.Flip2.SessionCleanup.StaleThreshold,
+			ExpirationThreshold: d.config.Flip2.SessionCleanup.ExpirationThreshold,
+			OrphanThreshold:     d.config.Flip2.SessionCleanup.OrphanThreshold,
+			MaxSessionAge:       d.config.Flip2.SessionCleanup.MaxSessionAge,
+			BatchSize:           d.config.Flip2.SessionCleanup.BatchSize,
+		}
+
+		// Get dbx.Builder from PocketBase for the SessionCleaner
+		dbxBuilder := d.pb.DB()
+
+		cleaner := session.NewSessionCleaner(dbxBuilder, cleanupConfig, d.logger)
+		d.sessionCleanup = session.NewCleanupScheduler(cleaner, d.config.Flip2.SessionCleanup.CheckInterval, d.logger)
+
+		// Start via OnServe hook
+		d.pb.OnServe().BindFunc(func(e *core.ServeEvent) error {
+			// Start with background context since this runs in a goroutine
+			if err := d.sessionCleanup.Start(context.Background()); err != nil {
+				d.logger.Error("Failed to start session cleanup scheduler", "error", err)
+			} else {
+				d.logger.Info("Session cleanup scheduler started",
+					"interval", d.config.Flip2.SessionCleanup.CheckInterval)
+			}
+			return e.Next()
+		})
+	}
+
 	// Initialize Task Queue
 	queueConfig := queue.QueueConfig{
 		PocketBase:      d.pb,
@@ -1609,16 +1696,38 @@ func (d *Daemon) initializeFLIP2API() {
 	d.taskQueue = queue.NewQueue(queueConfig)
 	d.logger.Info("Task Queue initialized (will start after PocketBase is ready)")
 
-	// Initialize API Handlers with cost tracker
-	d.apiHandlers = api.NewAPIHandlers(d.pb, d.llmRegistry, d.taskQueue, d.costTracker)
+	// Initialize API Handlers with cost tracker and budget tracker
+	d.apiHandlers = api.NewAPIHandlers(d.pb, d.llmRegistry, d.taskQueue, d.costTracker, d.budgetTracker)
+	d.apiHandlers.SetSessionManager(d.sessionManager)
+	d.apiHandlers.SetReconnectionManager(d.reconnectionManager)
+
+	// Initialize WebSocket components
+	d.wsHub = websocket.NewHub()
+	// Pass underlying slog.Logger to websocket handler
+	d.wsHandler = websocket.NewHandler(d.pb, d.wsHub, d.logger, d.config.Flip2.Security.APIKey)
+
+	// Start WebSocket Hub in background with daemon context
+	// Start WebSocket Hub in background with daemon context
+	recovery.SafelyGo(d.logger, "WebSocket Hub", func() {
+		d.wsHub.Run(context.Background())
+	})
+	d.logger.Info("WebSocket Hub started")
 
 	// Register API routes via OnServe hook
 	d.pb.OnServe().BindFunc(func(e *core.ServeEvent) error {
 		d.apiHandlers.RegisterAPIRoutes(e.Router)
+
+		// Register WebSocket endpoint
+		e.Router.GET("/api/ws", func(evt *core.RequestEvent) error {
+			d.wsHandler.ServeHTTP(evt.Response, evt.Request)
+			return nil
+		})
+
 		d.logger.Info("FLIP2 API routes registered",
 			"endpoints", []string{
 				"/api/agents", "/api/tasks", "/api/llm/invoke",
 				"/api/llm/backends", "/api/signals", "/api/flip/health",
+				"/api/ws",
 			})
 		return e.Next()
 	})
@@ -1733,6 +1842,42 @@ func (d *Daemon) initializeAlerts() {
 		d.logger.Info("Alert evaluator started",
 			"interval", rules.Evaluation.Interval,
 			"rules_enabled", enabledCount)
+
+		// Set budget tracker alert callback to fire alerts
+		if d.budgetTracker != nil && d.alertManager != nil {
+			d.budgetTracker.SetAlertCallback(func(b *budget.Budget, alertType string) {
+				severity := alerts.SeverityWarning
+				if alertType == budget.AlertTypeBudgetExhausted {
+					severity = alerts.SeverityCritical
+				}
+
+				// Create a pseudo-rule for the alert
+				rule := &alerts.Rule{
+					Name:        fmt.Sprintf("budget_%s_%s", alertType, b.ID),
+					Description: fmt.Sprintf("Budget %s: %s", alertType, b.Name),
+					Severity:    severity,
+					Threshold:   b.LimitUSD,
+					Enabled:     true,
+					Channels:    []string{"slack"}, // Default to slack
+				}
+
+				message := fmt.Sprintf("Budget %s: %s has consumed $%.4f of $%.2f limit (%.1f%%)",
+					alertType, b.Name, b.ConsumedUSD, b.LimitUSD, (b.ConsumedUSD/b.LimitUSD)*100)
+
+				metadata := map[string]interface{}{
+					"budget_id":    b.ID,
+					"budget_name":  b.Name,
+					"scope":        string(b.Scope),
+					"scope_id":     b.ScopeID,
+					"consumed_usd": b.ConsumedUSD,
+					"limit_usd":    b.LimitUSD,
+					"status":       string(b.Status),
+				}
+
+				d.alertManager.Fire(context.Background(), rule, b.ConsumedUSD, message, metadata)
+			})
+			d.logger.Info("Budget alert callback registered")
+		}
 
 		d.logger.Info("Alerting system started successfully")
 		return e.Next()

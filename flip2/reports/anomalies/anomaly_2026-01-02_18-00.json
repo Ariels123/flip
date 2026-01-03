@@ -1,0 +1,48 @@
+{
+  "anomalies": [
+    {
+      "message": "No signal activity in the last 24 hours",
+      "severity": "warning",
+      "type": "no_recent_activity",
+      "value": 0
+    },
+    {
+      "agent": "ag-orchestrator",
+      "message": "Agent 'ag-orchestrator' accounts for \u003e80% of signals (4/4)",
+      "severity": "info",
+      "type": "agent_dominance",
+      "value": 4
+    }
+  ],
+  "node_id": "mac",
+  "statistics": {
+    "anomalies": [
+      {
+        "message": "No signal activity in the last 24 hours",
+        "severity": "warning",
+        "type": "no_recent_activity",
+        "value": 0
+      },
+      {
+        "agent": "ag-orchestrator",
+        "message": "Agent 'ag-orchestrator' accounts for \u003e80% of signals (4/4)",
+        "severity": "info",
+        "type": "agent_dominance",
+        "value": 4
+      }
+    ],
+    "anomaly_count": 2,
+    "by_from_agent": {
+      "ag-orchestrator": 4
+    },
+    "by_signal_type": {},
+    "by_to_agent": {
+      "claud-win": 4
+    },
+    "node_id": "mac",
+    "timestamp": "2026-01-02T18:00:00",
+    "total_signals": 4,
+    "unread_signals": 4
+  },
+  "timestamp": "2026-01-02T18:00:00"
+}

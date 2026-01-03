@@ -2,6 +2,7 @@ package hierarchy
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -787,5 +788,186 @@ func TestWorkerPoolSlowResponseDegrades(t *testing.T) {
 	health, _ := pool.GetWorkerHealth("worker-1")
 	if health.Status != HealthStatusDegraded {
 		t.Errorf("expected worker to be degraded due to slow response, got %s", health.Status)
+	}
+}
+
+// TestWorkerPoolEventsComprehensive tests all types of pool events.
+func TestWorkerPoolEventsComprehensive(t *testing.T) {
+	config := DefaultPoolConfig()
+	config.MaxSize = 2
+	config.AutoRemoveUnhealthy = false
+	pool := NewWorkerPool("pool-1", "supervisor-1", config)
+
+	events := make(chan *WorkerPoolEvent, 20)
+	pool.SetEventHandler(func(event *WorkerPoolEvent) {
+		events <- event
+	})
+
+	// 1. EventWorkerAdded
+	worker1 := &HierarchyNode{AgentID: "worker-1", Role: RoleWorker}
+	_ = pool.AddWorker(worker1)
+	
+	found := false
+	for i := 0; i < 5; i++ {
+		select {
+		case e := <-events:
+			if e.Type == EventWorkerAdded {
+				found = true
+				break
+			}
+		case <-time.After(50 * time.Millisecond):
+		}
+		if found { break }
+	}
+	if !found {
+		t.Error("Timed out waiting for EventWorkerAdded")
+	}
+
+	// 2. EventPoolSizeLimitHit
+	worker2 := &HierarchyNode{AgentID: "worker-2", Role: RoleWorker}
+	_ = pool.AddWorker(worker2)
+	
+	worker3 := &HierarchyNode{AgentID: "worker-3", Role: RoleWorker}
+	err := pool.AddWorker(worker3)
+	if err == nil {
+		t.Error("Expected error adding worker to full pool")
+	}
+	
+	found = false
+	for i := 0; i < 10; i++ {
+		select {
+		case e := <-events:
+			if e.Type == EventPoolSizeLimitHit {
+				found = true
+				break
+			}
+		case <-time.After(50 * time.Millisecond):
+		}
+		if found { break }
+	}
+	if !found {
+		t.Error("Timed out waiting for EventPoolSizeLimitHit")
+	}
+
+	// 3. EventWorkerHealthChanged
+	_ = pool.MarkWorkerHealthy("worker-1")
+	found = false
+	for i := 0; i < 5; i++ {
+		select {
+		case e := <-events:
+			if e.Type == EventWorkerHealthChanged {
+				found = true
+				break
+			}
+		case <-time.After(50 * time.Millisecond):
+		}
+		if found { break }
+	}
+	if !found {
+		t.Error("Timed out waiting for EventWorkerHealthChanged")
+	}
+
+	// 4. EventHealthCheckFailed
+	pool.SetHealthChecker(func(ctx context.Context, workerID string) (bool, int64, error) {
+		return false, 0, fmt.Errorf("simulated failure")
+	})
+	pool.RunHealthChecks(context.Background())
+	
+	found = false
+	for i := 0; i < 10; i++ {
+		select {
+		case e := <-events:
+			if e.Type == EventHealthCheckFailed {
+				found = true
+				break
+			}
+		case <-time.After(50 * time.Millisecond):
+		}
+		if found { break }
+	}
+	if !found {
+		t.Error("Expected EventHealthCheckFailed events")
+	}
+
+	// 5. EventWorkerRemoved
+	_ = pool.RemoveWorker("worker-1")
+	found = false
+	for i := 0; i < 10; i++ {
+		select {
+		case e := <-events:
+			if e.Type == EventWorkerRemoved {
+				found = true
+				break
+			}
+		case <-time.After(50 * time.Millisecond):
+		}
+		if found { break }
+	}
+	if !found {
+		t.Error("Timed out waiting for EventWorkerRemoved")
+	}
+}
+
+// TestWorkerPoolListWorkersSorting verifies that ListWorkers returns workers sorted by ID.
+func TestWorkerPoolListWorkersSorting(t *testing.T) {
+	pool := NewWorkerPool("pool-1", "supervisor-1", DefaultPoolConfig())
+
+	ids := []string{"z", "a", "m", "b"}
+	for _, id := range ids {
+		_ = pool.AddWorker(&HierarchyNode{AgentID: id, Role: RoleWorker})
+	}
+
+	workers := pool.ListWorkers()
+	if len(workers) != 4 {
+		t.Fatalf("Expected 4 workers, got %d", len(workers))
+	}
+
+	if workers[0].AgentID != "a" || workers[1].AgentID != "b" || workers[2].AgentID != "m" || workers[3].AgentID != "z" {
+		t.Errorf("Workers not sorted correctly: %v, %v, %v, %v", 
+			workers[0].AgentID, workers[1].AgentID, workers[2].AgentID, workers[3].AgentID)
+	}
+}
+
+// TestWorkerPoolConcurrencyHeavy tests the worker pool with more intense concurrent operations.
+func TestWorkerPoolConcurrencyHeavy(t *testing.T) {
+	pool := NewWorkerPool("pool-1", "supervisor-1", PoolConfig{MaxSize: 1000})
+	
+	var wg sync.WaitGroup
+	numOps := 100
+	
+	// Concurrent Adds
+	for i := 0; i < numOps; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			_ = pool.AddWorker(&HierarchyNode{AgentID: fmt.Sprintf("w-%d", id), Role: RoleWorker})
+		}(i)
+	}
+	
+	// Concurrent Status Updates
+	for i := 0; i < numOps; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			// Wait a bit to ensure worker exists
+			time.Sleep(1 * time.Millisecond)
+			_ = pool.MarkWorkerHealthy(fmt.Sprintf("w-%d", id))
+		}(i)
+	}
+
+	// Concurrent Health Checks
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 10; i++ {
+			pool.RunHealthChecks(context.Background())
+			time.Sleep(1 * time.Millisecond)
+		}
+	}()
+
+	wg.Wait()
+	
+	if pool.Size() > numOps {
+		t.Errorf("Pool size %d exceeds number of operations %d", pool.Size(), numOps)
 	}
 }

@@ -366,7 +366,7 @@ func (m *SessionManager) recordToSession(ctx context.Context, record *core.Recor
 		Name:          record.GetString("name"),
 		Status:        SessionStatus(record.GetString("status")),
 		CoordinatorID: record.GetString("coordinator_id"),
-		Description:   record.GetString("description"),
+		Description:   stringPtr(record.GetString("description")),
 		CreatedAt:     record.GetDateTime("created").Time(),
 		UpdatedAt:     record.GetDateTime("updated").Time(),
 		MessageCount:  record.GetInt("message_count"),
@@ -503,23 +503,27 @@ func (m *SessionManager) ReconnectAgents(ctx context.Context, session *SessionSt
 }
 
 // checkAgentHealth verifies if an agent is still running and responsive.
-// This is a placeholder implementation that can be enhanced with actual health checks.
 func (m *SessionManager) checkAgentHealth(ctx context.Context, agent *AgentRef) error {
-	// In a production implementation, this would:
-	// 1. Send a heartbeat/ping request to the agent
-	// 2. Check the agent registry for status
-	// 3. Verify the agent process is still running
-	// For now, we assume all agents that existed before reconnection are potentially available
-
-	// Example: Check with agent manager if available
-	// This would require injecting an agent manager into SessionManager
 	if agent.AgentID == "" {
 		return fmt.Errorf("agent ID is empty")
 	}
 
-	// Simulate a health check by verifying agent ID is valid
-	if len(agent.AgentID) < 5 {
-		return fmt.Errorf("invalid agent ID format")
+	// Check against the agents collection in PocketBase
+	record, err := m.app.FindRecordById("agents", agent.AgentID)
+	if err != nil {
+		// Try to find by agent_id field if the ID provided is not the record ID
+		records, err := m.app.FindRecordsByFilter("agents", fmt.Sprintf("agent_id='%s'", agent.AgentID), "", 1, 0)
+		if err != nil || len(records) == 0 {
+			return fmt.Errorf("agent not found in registry: %s", agent.AgentID)
+		}
+		record = records[0]
+	}
+
+	// Check status
+	status := record.GetString("status")
+	if status == "offline" {
+		// If we are strictly checking health, offline means unhealthy
+		return fmt.Errorf("agent is marked offline: %s", agent.AgentID)
 	}
 
 	return nil

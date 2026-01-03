@@ -132,11 +132,11 @@ func (e *Executor) Start() {
 	e.logger.InfoCtx(ctx, "Executor started", "max_concurrent", cap(e.semaphore))
 
 	// Auto-queue existing pending tasks on startup (fixes cold-start issue)
-	go e.queuePendingTasks()
+	go e.QueuePendingTasks()
 }
 
-// queuePendingTasks queues all existing pending tasks with assignees
-func (e *Executor) queuePendingTasks() {
+// QueuePendingTasks queues all existing pending tasks with assignees
+func (e *Executor) QueuePendingTasks() {
 	ctx := context.Background()
 	// Wait a bit for PocketBase to be fully ready
 	time.Sleep(2 * time.Second)

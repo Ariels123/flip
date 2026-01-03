@@ -51,13 +51,14 @@ flip2:
 
   executor:
     max_concurrent_tasks: 3
-    default_timeout: 300s
+    default_timeout: 900s  # Increased from 300s to 900s (15 min) for implementation tasks
     retry_attempts: 2
     retry_delay: 30s
     worker_prefix: |
-      You are a WORKER agent in the FLIP2 multi-agent system.
-      Complete your assigned task and report results clearly.
-      Do NOT spawn additional agents without explicit approval.
+      ROLE: Go Expert & Autonomous Worker.
+      SKILL_PACK: skills/go_expert.md (Context Loaded).
+      INSTRUCTION: Complete the assigned task. Output ONLY the code or JSON. No chatter.
+      CONTEXT: You are part of the FLIP2 distributed agent system.
 
   metrics:
     enabled: true
@@ -127,3 +128,12 @@ flip2:
       ag_win: ag-win
       anti-gravity: antigravity
       anti gravity: antigravity
+
+  session_cleanup:
+    enabled: true
+    stale_threshold: 30m
+    expiration_threshold: 168h  # 7 days
+    orphan_threshold: 15m
+    max_session_age: 720h       # 30 days
+    batch_size: 100
+    check_interval: 1h

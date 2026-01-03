@@ -692,14 +692,14 @@ func (s *SupervisorAgent) DelegateTask(ctx context.Context, task *TaskRequiremen
 		}
 	}
 
-	// Check for preferred worker
+	// Check for preferred worker (only if available)
 	if task.PreferredWorkerID != "" {
 		for _, c := range candidates {
-			if c.WorkerID == task.PreferredWorkerID {
+			if c.WorkerID == task.PreferredWorkerID && c.IsAvailable {
 				return s.delegateToWorkerLocked(task, c)
 			}
 		}
-		// Preferred worker not available, continue with strategy
+		// Preferred worker not available or at capacity, continue with strategy
 	}
 
 	// Select worker based on strategy

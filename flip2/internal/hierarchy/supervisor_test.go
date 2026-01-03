@@ -1730,3 +1730,221 @@ func TestConfigurableBudget(t *testing.T) {
 	}
 }
 
+// TestSupervisorCapabilityMatchingComplex tests the scoring logic in capability matching.
+func TestSupervisorCapabilityMatchingComplex(t *testing.T) {
+	h := NewHierarchy()
+	_ = h.SetCoordinator("coord-1")
+	_ = h.AddSupervisor("sup-1")
+	supNode := h.Supervisors["sup-1"]
+	if supNode == nil {
+		t.Fatal("Failed to create supervisor node")
+	}
+	// Increase budget to allow many workers and spawns
+	supNode.Capabilities.DelegationBudget.MaxConcurrentSpawns = 10
+	supNode.Capabilities.DelegationBudget.MaxWorkers = 10
+	sa, err := NewSupervisorAgent(supNode)
+	if err != nil {
+		t.Fatalf("Failed to create supervisor agent: %v", err)
+	}
+
+	// Worker 1: Perfect match, but slightly loaded
+	_, _ = sa.SpawnWorker(context.Background(), "w1")
+	_ = sa.SetWorkerCapabilities("w1", []string{"cap1", "cap2"})
+	_ = sa.AssignTask("w1") // load penalty
+
+	// Worker 2: Perfect match, NO load
+	_, _ = sa.SpawnWorker(context.Background(), "w2")
+	_ = sa.SetWorkerCapabilities("w2", []string{"cap1", "cap2"})
+
+	// Worker 3: Partial match
+	_, _ = sa.SpawnWorker(context.Background(), "w3")
+	_ = sa.SetWorkerCapabilities("w3", []string{"cap1", "other"})
+
+	task := &TaskRequirements{
+		TaskID:               "t1",
+		RequiredCapabilities: []string{"cap1", "cap2"},
+	}
+
+	result, err := sa.DelegateTask(context.Background(), task, StrategyCapabilityMatch)
+	if err != nil {
+		t.Fatalf("DelegateTask error: %v", err)
+	}
+	
+	if !result.Success {
+		t.Fatalf("Delegation failed: %s", result.Reason)
+	}
+
+	// w2 should win over w1 because w1 has a load penalty
+	if result.WorkerID != "w2" {
+		t.Errorf("Expected w2 to win, got %s (Score: %f)", result.WorkerID, result.MatchScore)
+	}
+}
+
+// TestSupervisorImpliedCapabilities tests capabilities derived from worker_type.
+func TestSupervisorImpliedCapabilities(t *testing.T) {
+	h := NewHierarchy()
+	_ = h.SetCoordinator("coord-1")
+	_ = h.AddSupervisor("sup-1")
+	supNode := h.Supervisors["sup-1"]
+	supNode.Capabilities.DelegationBudget.MaxConcurrentSpawns = 10
+	sa, _ := NewSupervisorAgent(supNode)
+
+	types := []string{"code", "test", "research", "data"}
+	for _, ty := range types {
+		workerID := "w-" + ty
+		worker, err := sa.SpawnWorker(context.Background(), workerID)
+		if err != nil {
+			t.Fatalf("Failed to spawn %s: %v", workerID, err)
+		}
+		if worker.Metadata == nil {
+			worker.Metadata = make(map[string]interface{})
+		}
+		worker.Metadata["worker_type"] = ty
+	}
+
+	testCases := []struct {
+		cap      string
+		expected string
+	}{
+		{"code_generation", "w-code"},
+		{"testing", "w-test"},
+		{"research", "w-research"},
+		{"data_processing", "w-data"},
+	}
+
+	for _, tc := range testCases {
+		task := &TaskRequirements{
+			TaskID:               "task-" + tc.cap,
+			RequiredCapabilities: []string{tc.cap},
+		}
+		result, _ := sa.DelegateTask(context.Background(), task, StrategyCapabilityMatch)
+		if !result.Success {
+			t.Errorf("Failed to delegate task for cap %s: %s", tc.cap, result.Reason)
+			continue
+		}
+		if result.WorkerID != tc.expected {
+			t.Errorf("For capability %s, expected worker %s, got %s", tc.cap, tc.expected, result.WorkerID)
+		}
+	}
+}
+
+// TestSupervisorRecordResultUnknownWorker tests recording results for workers not in pool.
+func TestSupervisorRecordResultUnknownWorker(t *testing.T) {
+	h := NewHierarchy()
+	_ = h.SetCoordinator("coord-1")
+	_ = h.AddSupervisor("sup-1")
+	sa, _ := NewSupervisorAgent(h.Supervisors["sup-1"])
+
+	// 1. Result for worker that never existed
+	res1 := &WorkerResult{WorkerID: "ghost", Status: WorkerStatusCompleted}
+	err := sa.RecordWorkerResult(res1)
+	if err == nil {
+		t.Error("Expected error recording result for ghost worker")
+	}
+
+	// 2. Result for worker that was terminated (should succeed)
+	_, _ = sa.SpawnWorker(context.Background(), "w1")
+	_ = sa.TerminateWorker(context.Background(), "w1")
+	
+	res2 := &WorkerResult{WorkerID: "w1", Status: WorkerStatusCompleted}
+	err = sa.RecordWorkerResult(res2)
+	if err != nil {
+		t.Errorf("Expected success recording result for terminated worker, got: %v", err)
+	}
+}
+
+// TestSupervisorConcurrentSpawnLimitRealCount tests that checkConcurrentSpawnsLimit 
+// correctly counts only running/active workers.
+func TestSupervisorConcurrentSpawnLimitRealCount(t *testing.T) {
+	h := NewHierarchy()
+	_ = h.SetCoordinator("coord-1")
+	_ = h.AddSupervisor("sup-1")
+	supNode := h.Supervisors["sup-1"]
+	// Limit to 2 concurrent spawns
+	supNode.Capabilities.DelegationBudget.MaxConcurrentSpawns = 2
+	sa, _ := NewSupervisorAgent(supNode)
+
+	// Spawn 2 workers
+	_, _ = sa.SpawnWorker(context.Background(), "w1")
+	_, _ = sa.SpawnWorker(context.Background(), "w2")
+
+	// Try to spawn 3rd - should fail
+	_, err := sa.SpawnWorker(context.Background(), "w3")
+	if err == nil {
+		t.Error("Expected failure spawning 3rd worker (limit 2)")
+	}
+
+	// Terminate one
+	_ = sa.TerminateWorker(context.Background(), "w1")
+
+	// Now should be able to spawn another one
+	_, err = sa.SpawnWorker(context.Background(), "w3")
+	if err != nil {
+		t.Errorf("Expected success spawning 3rd worker after terminating 1st, got: %v", err)
+	}
+}
+
+// TestSupervisorGetSpawnedWorkersOrder verifies the combined list of active and terminated workers.
+func TestSupervisorGetSpawnedWorkersOrder(t *testing.T) {
+	h := NewHierarchy()
+	_ = h.SetCoordinator("coord-1")
+	_ = h.AddSupervisor("sup-1")
+	supNode := h.Supervisors["sup-1"]
+	supNode.Capabilities.DelegationBudget.MaxConcurrentSpawns = 10
+	sa, _ := NewSupervisorAgent(supNode)
+
+	_, _ = sa.SpawnWorker(context.Background(), "active-1")
+	_, _ = sa.SpawnWorker(context.Background(), "active-2")
+	_, _ = sa.SpawnWorker(context.Background(), "to-terminate")
+	
+	_ = sa.TerminateWorker(context.Background(), "to-terminate")
+
+	workers := sa.GetSpawnedWorkers()
+	if len(workers) != 3 {
+		t.Fatalf("Expected 3 spawned workers, got %d", len(workers))
+	}
+
+	foundTerminated := false
+	activeCount := 0
+	for _, w := range workers {
+		if w.AgentID == "to-terminate" && w.Status == "terminated" {
+			foundTerminated = true
+		} else if w.Status == "active" {
+			activeCount++
+		}
+	}
+
+	if !foundTerminated {
+		t.Error("Terminated worker not found in GetSpawnedWorkers")
+	}
+	if activeCount != 2 {
+		t.Errorf("Expected 2 active workers, got %d", activeCount)
+	}
+}
+
+// TestSupervisorAssignTaskLimits tests MaxTasksPerWorker enforcement.
+func TestSupervisorAssignTaskLimits(t *testing.T) {
+	h := NewHierarchy()
+	_ = h.SetCoordinator("coord-1")
+	_ = h.AddSupervisor("sup-1")
+	supNode := h.Supervisors["sup-1"]
+	supNode.Capabilities.DelegationBudget.MaxTasksPerWorker = 2
+	sa, _ := NewSupervisorAgent(supNode)
+
+	_, _ = sa.SpawnWorker(context.Background(), "w1")
+
+	err := sa.AssignTask("w1") // 1
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = sa.AssignTask("w1") // 2
+	if err != nil {
+		t.Fatal(err)
+	}
+	
+	err = sa.AssignTask("w1") // 3 - should fail
+	if err == nil {
+		t.Error("Expected error assigning 3rd task to worker with limit 2")
+	}
+}
+

@@ -94,8 +94,8 @@ func (ts *testSession) getState() *SessionState {
 	return &stateCopy
 }
 
-// setupTestDB creates an in-memory SQLite database for testing.
-func setupTestDB(t *testing.T) *DB {
+// setupIntegrationDB creates an in-memory SQLite database for testing.
+func setupIntegrationDB(t *testing.T) *DB {
 	conn, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("failed to open test database: %v", err)
@@ -829,13 +829,13 @@ func TestComplexSessionScenario(t *testing.T) {
 // TestSessionPersistence tests that sessions are correctly persisted to
 // and retrieved from the database.
 func TestSessionPersistence(t *testing.T) {
-	db := setupTestDB(t)
+	db := setupIntegrationDB(t)
 	defer teardownTestDB(t, db)
 
 	// Create and save a session
 	session := NewSessionState("test-persistence", "coordinator-1")
 	session.Status = SessionActive
-	session.Description = "Test session persistence"
+	session.Description = stringPtr("Test session persistence")
 
 	err := db.CreateSession(session)
 	if err != nil {
@@ -858,14 +858,14 @@ func TestSessionPersistence(t *testing.T) {
 	if retrieved.Status != session.Status {
 		t.Errorf("expected status %s, got %s", session.Status, retrieved.Status)
 	}
-	if retrieved.Description != session.Description {
-		t.Errorf("expected description %s, got %s", session.Description, retrieved.Description)
+	if *retrieved.Description != *session.Description {
+		t.Errorf("expected description %v, got %v", *session.Description, *retrieved.Description)
 	}
 }
 
 // TestMessagePersistence tests that messages are correctly saved and retrieved.
 func TestMessagePersistence(t *testing.T) {
-	db := setupTestDB(t)
+	db := setupIntegrationDB(t)
 	defer teardownTestDB(t, db)
 
 	// Create session
@@ -902,7 +902,7 @@ func TestMessagePersistence(t *testing.T) {
 
 // TestMessageListingBySession tests that messages can be listed by session.
 func TestMessageListingBySession(t *testing.T) {
-	db := setupTestDB(t)
+	db := setupIntegrationDB(t)
 	defer teardownTestDB(t, db)
 
 	// Create sessions
@@ -968,7 +968,7 @@ func TestMessageListingBySession(t *testing.T) {
 
 // TestAgentPersistence tests that agents are correctly saved and retrieved.
 func TestAgentPersistence(t *testing.T) {
-	db := setupTestDB(t)
+	db := setupIntegrationDB(t)
 	defer teardownTestDB(t, db)
 
 	// Create session
@@ -1006,7 +1006,7 @@ func TestAgentPersistence(t *testing.T) {
 
 // TestTaskPersistence tests that tasks are correctly saved and retrieved.
 func TestTaskPersistence(t *testing.T) {
-	db := setupTestDB(t)
+	db := setupIntegrationDB(t)
 	defer teardownTestDB(t, db)
 
 	// Create session and agent
@@ -1049,7 +1049,7 @@ func TestTaskPersistence(t *testing.T) {
 
 // TestSessionUpdate tests that session updates are persisted.
 func TestSessionUpdate(t *testing.T) {
-	db := setupTestDB(t)
+	db := setupIntegrationDB(t)
 	defer teardownTestDB(t, db)
 
 	// Create session
@@ -1088,7 +1088,7 @@ func TestSessionUpdate(t *testing.T) {
 
 // TestSessionVariables tests session variable storage.
 func TestSessionVariables(t *testing.T) {
-	db := setupTestDB(t)
+	db := setupIntegrationDB(t)
 	defer teardownTestDB(t, db)
 
 	// Create session
@@ -1144,7 +1144,7 @@ func TestSessionVariables(t *testing.T) {
 
 // TestSessionDeletion tests that sessions and related data are deleted.
 func TestSessionDeletion(t *testing.T) {
-	db := setupTestDB(t)
+	db := setupIntegrationDB(t)
 	defer teardownTestDB(t, db)
 
 	// Create session with related data

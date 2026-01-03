@@ -52,6 +52,10 @@ type RoleTemplate struct {
 	// This controls the maximum response size and helps manage costs.
 	// Typical values: 2048, 4096, 8192, 16384
 	MaxTokens int `json:"max_tokens"`
+
+	// CostBudget defines an optional hourly spending limit for this role in USD.
+	// If set, agents spawned with this role will be constrained by this budget.
+	CostBudget float64 `json:"cost_budget,omitempty"`
 }
 
 // MarshalJSON implements json.Marshaler for RoleTemplate.

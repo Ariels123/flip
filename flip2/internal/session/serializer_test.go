@@ -16,7 +16,7 @@ func TestSerializeSessionBasic(t *testing.T) {
 		Name:          "Test Session",
 		Status:        SessionActive,
 		CoordinatorID: "coordinator-001",
-		Description:   "A test session",
+		Description:   stringPtr("A test session"),
 		Messages:      make([]Message, 0),
 		ActiveAgents:  make([]AgentRef, 0),
 		Tasks:         make([]TaskRef, 0),
@@ -101,7 +101,7 @@ func TestRoundTripSerialization(t *testing.T) {
 		Name:          "Round Trip Test",
 		Status:        SessionActive,
 		CoordinatorID: "coordinator-003",
-		Description:   "Testing round-trip serialization",
+		Description:   stringPtr("Testing round-trip serialization"),
 		CreatedAt:     time.Now().Add(-1 * time.Hour),
 		UpdatedAt:     time.Now(),
 		Messages: []Message{
@@ -188,7 +188,7 @@ func TestRoundTripSerialization(t *testing.T) {
 	if restored.Name != session.Name {
 		t.Errorf("Name mismatch after round-trip")
 	}
-	if restored.Description != session.Description {
+	if *restored.Description != *session.Description {
 		t.Errorf("Description mismatch after round-trip")
 	}
 	if restored.Status != session.Status {
@@ -678,7 +678,7 @@ func TestSerializeAllSessionStateFields(t *testing.T) {
 		Status:          SessionActive,
 		CoordinatorID:   "coordinator-001",
 		ParentSessionID: &parentID,
-		Description:     "Test description",
+		Description:     stringPtr("Test description"),
 		Messages: []Message{
 			{
 				ID:          "msg-001",
@@ -807,8 +807,8 @@ func TestSerializeAllSessionStateFields(t *testing.T) {
 	if restored.CoordinatorID != session.CoordinatorID {
 		t.Errorf("CoordinatorID mismatch: %s != %s", restored.CoordinatorID, session.CoordinatorID)
 	}
-	if restored.Description != session.Description {
-		t.Errorf("Description mismatch: %s != %s", restored.Description, session.Description)
+	if *restored.Description != *session.Description {
+		t.Errorf("Description mismatch: %v != %v", *restored.Description, *session.Description)
 	}
 
 	// Check optional ParentSessionID

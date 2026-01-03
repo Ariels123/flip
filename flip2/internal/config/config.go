@@ -22,6 +22,7 @@ type Config struct {
 		Sync       SyncConfig               `yaml:"sync"`
 		Archiver   ArchiverConfig           `yaml:"archiver"`
 		CommMonitor CommMonitorConfig       `yaml:"commmonitor"`
+		SessionCleanup SessionCleanupConfig `yaml:"session_cleanup"`
 	} `yaml:"flip2"`
 }
 
@@ -117,6 +118,17 @@ type ArchiverConfig struct {
 	ArchivePath         string        `yaml:"archive_path"`
 }
 
+// SessionCleanupConfig configures session cleanup
+type SessionCleanupConfig struct {
+	Enabled             bool          `yaml:"enabled"`
+	StaleThreshold      time.Duration `yaml:"stale_threshold"`
+	ExpirationThreshold time.Duration `yaml:"expiration_threshold"`
+	OrphanThreshold     time.Duration `yaml:"orphan_threshold"`
+	MaxSessionAge       time.Duration `yaml:"max_session_age"`
+	BatchSize           int           `yaml:"batch_size"`
+	CheckInterval       time.Duration `yaml:"check_interval"`
+}
+
 // CommMonitorConfig configures the communication monitor
 type CommMonitorConfig struct {
 	Enabled         bool              `yaml:"enabled"`
@@ -159,6 +171,26 @@ func LoadConfig(path string) (*Config, error) {
 	// must be explicitly configured in config.yaml to respect user intent
 	if config.Flip2.CommMonitor.Threshold == 0 {
 		config.Flip2.CommMonitor.Threshold = 0.75
+	}
+
+	// SessionCleanup defaults
+	if config.Flip2.SessionCleanup.CheckInterval == 0 {
+		config.Flip2.SessionCleanup.CheckInterval = 1 * time.Hour
+	}
+	if config.Flip2.SessionCleanup.StaleThreshold == 0 {
+		config.Flip2.SessionCleanup.StaleThreshold = 30 * time.Minute
+	}
+	if config.Flip2.SessionCleanup.ExpirationThreshold == 0 {
+		config.Flip2.SessionCleanup.ExpirationThreshold = 7 * 24 * time.Hour
+	}
+	if config.Flip2.SessionCleanup.OrphanThreshold == 0 {
+		config.Flip2.SessionCleanup.OrphanThreshold = 15 * time.Minute
+	}
+	if config.Flip2.SessionCleanup.MaxSessionAge == 0 {
+		config.Flip2.SessionCleanup.MaxSessionAge = 30 * 24 * time.Hour
+	}
+	if config.Flip2.SessionCleanup.BatchSize == 0 {
+		config.Flip2.SessionCleanup.BatchSize = 100
 	}
 
 	// Validate CommMonitor configuration

@@ -1,0 +1,125 @@
+================================================================================
+HIE-008: Budget Tracking Implementation (Gemini Flash)
+Task Status: COMPLETE
+Date: January 2, 2026
+Worker: Gemini (FLIP System)
+================================================================================
+
+DELIVERABLES SUMMARY
+================================================================================
+
+1. Core Implementation
+   File: /Users/arielspivakovsky/src/flip/flip2/internal/budget/budget.go
+   (Verified existing implementation)
+   
+   Contents:
+   - Budget struct (limits, periods, scopes)
+   - BudgetConsumption struct (usage tracking)
+   - BudgetStore interface
+   - Tracker logic (check, record, reset)
+   
+2. Persistence Layer
+   File: /Users/arielspivakovsky/src/flip/flip2/internal/budget/pbstore.go
+   
+   Contents:
+   - Implementation of BudgetStore using PocketBase
+   - CRUD operations for Budgets
+   - Consumption recording
+   - Aggregation queries (Top Consumers, Total Consumed)
+   
+3. Database Migrations
+   File: /Users/arielspivakovsky/src/flip/flip2/pb_migrations/14_add_budgets_collection.go
+   
+   Contents:
+   - 'budgets' collection definition
+   - 'budget_consumptions' collection definition
+   - Indexes for performance
+
+4. API & CLI Integration
+   File: /Users/arielspivakovsky/src/flip/flip2/internal/api/handlers.go
+   File: /Users/arielspivakovsky/src/flip/flip2/cmd/flip2/budget_cmd.go (Added)
+   
+   Contents:
+   - Budget Management Endpoints (Create, List, Get, Update, Reset, Report)
+   - CLI command 'flip2 budget' with subcommands: list, get, report, reset, create, update
+   - Integration into HandleInvokeLLM for budget enforcement
+   
+5. Daemon & Alerting Integration
+   File: /Users/arielspivakovsky/src/flip/flip2/internal/daemon/daemon.go
+   
+   Contents:
+   - Initialization of BudgetTracker
+   - Scheduled job for budget resets (hourly)
+   - Integration with alerting system via SetAlertCallback
+
+6. Role-Based Budgets
+   File: /Users/arielspivakovsky/src/flip/flip2/internal/spawn/role.go
+   File: /Users/arielspivakovsky/src/flip/flip2/internal/spawn/builtin_roles.go
+   
+   Contents:
+   - Added CostBudget field to RoleTemplate
+   - Configured default budgets for gemini-flash-worker ($5.00/hr) and haiku-worker ($2.00/hr)
+   - Automatic budget creation when spawning agents via CLI
+
+================================================================================
+FUNCTIONALITY VERIFICATION
+================================================================================
+
+✅ Budget Types Supported
+   - Scopes: Global, Agent, Model
+   - Periods: Hourly, Daily, Weekly, Monthly
+
+✅ Enforcement Logic
+   - Pre-check in HandleInvokeLLM (now handles expired budgets correctly)
+   - Blocks execution if budget exhausted
+   - Records consumption after execution
+
+✅ Persistence
+   - Budgets stored in PocketBase
+   - Consumption history tracked
+   - Efficient querying via indexes
+
+✅ Management API & CLI
+   - POST /api/budgets | flip2 budget create - Create new budget
+   - GET /api/budgets | flip2 budget list - List budgets
+   - GET /api/budgets/{id} | flip2 budget get - Get budget details
+   - PATCH /api/budgets/{id} | flip2 budget update - Update limit/enable/disable
+   - POST /api/budgets/{id}/reset | flip2 budget reset - Manual reset
+   - GET /api/budgets/{id}/report | flip2 budget report - Detailed usage report
+
+================================================================================
+USAGE EXAMPLES
+================================================================================
+
+1. List all budgets:
+```bash
+./flip2 budget list
+```
+
+2. Check Budget Report for an agent:
+```bash
+./flip2 budget report <budget_id>
+```
+
+3. Spawn a Gemini Flash worker with automatic budget:
+```bash
+./flip2 agent spawn --role gemini-flash-worker --task "Analyze logs"
+```
+
+================================================================================
+FILES MODIFIED/CREATED
+================================================================================
+
+- internal/budget/budget.go (Modified: auto-reset in CheckBudget)
+- internal/budget/budget_test.go (Modified: added TestCheckBudgetAutoReset)
+- cmd/flip2/budget_cmd.go (Created)
+- cmd/flip2/main.go (Modified: registered budgetCmd, improved spawnAgent)
+- internal/spawn/role.go (Modified: added CostBudget)
+- internal/spawn/builtin_roles.go (Modified: added default budgets)
+- internal/daemon/daemon.go (Modified: added alert callback)
+- internal/budget/pbstore.go (Created)
+- pb_migrations/14_add_budgets_collection.go (Created)
+- internal/api/handlers.go (Modified)
+- internal/api/routes.go (Modified)
+
+================================================================================

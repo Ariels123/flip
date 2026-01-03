@@ -9,8 +9,10 @@ import (
 	"time"
 
 	"flip2/internal/costtracker"
+	"flip2/internal/budget"
 	"flip2/internal/llm"
 	"flip2/internal/queue"
+	"flip2/internal/session"
 
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/core"
@@ -18,25 +20,39 @@ import (
 
 // APIHandlers provides HTTP handlers for the FLIP2 API
 type APIHandlers struct {
-	pb          *pocketbase.PocketBase
-	registry    *llm.Registry
-	queue       *queue.Queue
-	costTracker *costtracker.Tracker
+	pb                   *pocketbase.PocketBase
+	registry             *llm.Registry
+	queue                *queue.Queue
+	costTracker          *costtracker.Tracker
+	budgetTracker        *budget.Tracker
+	sessionMgr           *session.SessionManager
+	reconnectionMgr      *session.ReconnectionManager
 }
 
 // NewAPIHandlers creates a new API handlers instance
-func NewAPIHandlers(pb *pocketbase.PocketBase, registry *llm.Registry, q *queue.Queue, ct *costtracker.Tracker) *APIHandlers {
+func NewAPIHandlers(pb *pocketbase.PocketBase, registry *llm.Registry, q *queue.Queue, ct *costtracker.Tracker, bt *budget.Tracker) *APIHandlers {
 	return &APIHandlers{
 		pb:          pb,
 		registry:    registry,
 		queue:       q,
 		costTracker: ct,
+		budgetTracker: bt,
 	}
 }
 
 // SetCostTracker sets the cost tracker for the API handlers
 func (h *APIHandlers) SetCostTracker(ct *costtracker.Tracker) {
 	h.costTracker = ct
+}
+
+// SetSessionManager sets the session manager for the API handlers
+func (h *APIHandlers) SetSessionManager(sm *session.SessionManager) {
+	h.sessionMgr = sm
+}
+
+// SetReconnectionManager sets the reconnection manager for the API handlers
+func (h *APIHandlers) SetReconnectionManager(rm *session.ReconnectionManager) {
+	h.reconnectionMgr = rm
 }
 
 // === Agent Endpoints ===
@@ -386,6 +402,31 @@ func (h *APIHandlers) HandleInvokeLLM(e *core.RequestEvent) error {
 		}
 	}
 
+	// Check budget if tracker is available
+	if h.budgetTracker != nil {
+		// Get agent ID from request header or use "api" as default
+		agentID := e.Request.Header.Get("X-Agent-ID")
+		if agentID == "" {
+			agentID = "api"
+		}
+		
+		// Check if budget allows execution (passing 0.0 as we don't know cost yet)
+		allowed, reason, err := h.budgetTracker.CheckBudget(e.Request.Context(), agentID, req.Model, 0.0)
+		if err != nil {
+			// Log error but proceed? Or fail? Let's log and proceed for resilience, unless it's critical.
+			// But for budget enforcement, we should probably fail if check fails?
+			// Let's assume fail on error for strictness.
+			return e.JSON(http.StatusInternalServerError, map[string]string{
+				"error": "Budget check failed: " + err.Error(),
+			})
+		}
+		if !allowed {
+			return e.JSON(http.StatusForbidden, map[string]string{
+				"error": "Budget exceeded: " + reason,
+			})
+		}
+	}
+
 	// Execute
 	opts := &llm.Options{
 		Model: req.Model,
@@ -419,6 +460,21 @@ func (h *APIHandlers) HandleInvokeLLM(e *core.RequestEvent) error {
 		); err != nil {
 			// Log error but don't fail the request
 			// The cost tracking is non-critical for API functionality
+		}
+		
+		// Also record against budget
+		if h.budgetTracker != nil {
+			if err := h.budgetTracker.RecordSpend(
+				context.Background(),
+				agentID,
+				response.Model,
+				"", // No task_id
+				response.CostUSD,
+				response.InputTokens,
+				response.OutputTokens,
+			); err != nil {
+				// Log error
+			}
 		}
 	}
 
@@ -761,4 +817,559 @@ func (h *APIHandlers) HandleGetCostsByModel(e *core.RequestEvent) error {
 		"costs": costs,
 		"count": len(costs),
 	})
+}
+
+// === Agent Reconnection Endpoints ===
+
+// ReconnectAgentRequest is the request body for agent reconnection
+type ReconnectAgentRequest struct {
+	AgentID   string `json:"agent_id"`
+	SessionID string `json:"session_id"`
+}
+
+// HandleReconnectAgent triggers reconnection for a specific agent
+func (h *APIHandlers) HandleReconnectAgent(e *core.RequestEvent) error {
+	if h.reconnectionMgr == nil {
+		return e.JSON(http.StatusServiceUnavailable, map[string]string{
+			"error": "Reconnection manager not available",
+		})
+	}
+
+	var req ReconnectAgentRequest
+	if err := json.NewDecoder(e.Request.Body).Decode(&req); err != nil {
+		return e.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid request body",
+		})
+	}
+
+	if req.AgentID == "" || req.SessionID == "" {
+		return e.JSON(http.StatusBadRequest, map[string]string{
+			"error": "agent_id and session_id are required",
+		})
+	}
+
+	// Start reconnection (async by default, but we'll wait for result)
+	result, err := h.reconnectionMgr.ReconnectAgent(e.Request.Context(), req.SessionID, req.AgentID)
+	if err != nil {
+		return e.JSON(http.StatusInternalServerError, map[string]string{
+			"error":   "Failed to start reconnection",
+			"details": err.Error(),
+		})
+	}
+
+	statusCode := http.StatusOK
+	if !result.Success {
+		statusCode = http.StatusConflict
+	}
+
+	return e.JSON(statusCode, map[string]interface{}{
+		"agent_id": result.AgentID,
+		"success":  result.Success,
+		"state":    result.State,
+		"duration": result.Duration.String(),
+		"error":    result.Error,
+	})
+}
+
+// HandleReconnectSession triggers reconnection for all agents in a session
+func (h *APIHandlers) HandleReconnectSession(e *core.RequestEvent) error {
+	if h.reconnectionMgr == nil || h.sessionMgr == nil {
+		return e.JSON(http.StatusServiceUnavailable, map[string]string{
+			"error": "Reconnection or session manager not available",
+		})
+	}
+
+	sessionID := e.Request.PathValue("id")
+	if sessionID == "" {
+		return e.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Session ID required",
+		})
+	}
+
+	// Get the session
+	sess, err := h.sessionMgr.GetSession(e.Request.Context(), sessionID)
+	if err != nil {
+		return e.JSON(http.StatusNotFound, map[string]string{
+			"error":   "Session not found",
+			"details": err.Error(),
+		})
+	}
+
+	// Reconnect all agents
+	results, err := h.reconnectionMgr.ReconnectAllAgents(e.Request.Context(), sess)
+	if err != nil {
+		return e.JSON(http.StatusInternalServerError, map[string]string{
+			"error":   "Failed to reconnect agents",
+			"details": err.Error(),
+		})
+	}
+
+	// Count results
+	succeeded := 0
+	failed := 0
+	for _, r := range results {
+		if r.Success {
+			succeeded++
+		} else {
+			failed++
+		}
+	}
+
+	return e.JSON(http.StatusOK, map[string]interface{}{
+		"session_id": sessionID,
+		"succeeded":  succeeded,
+		"failed":     failed,
+		"total":      len(results),
+		"results":    results,
+	})
+}
+
+// HandleGetReconnectionState returns the state of an active reconnection
+func (h *APIHandlers) HandleGetReconnectionState(e *core.RequestEvent) error {
+	if h.reconnectionMgr == nil {
+		return e.JSON(http.StatusServiceUnavailable, map[string]string{
+			"error": "Reconnection manager not available",
+		})
+	}
+
+	agentID := e.Request.PathValue("agent_id")
+	if agentID == "" {
+		return e.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Agent ID required",
+		})
+	}
+
+	state, exists := h.reconnectionMgr.GetReconnectionState(agentID)
+	if !exists {
+		return e.JSON(http.StatusNotFound, map[string]string{
+			"error": "No active reconnection for agent",
+		})
+	}
+
+	return e.JSON(http.StatusOK, state)
+}
+
+// HandleListActiveReconnections returns all active reconnection states
+func (h *APIHandlers) HandleListActiveReconnections(e *core.RequestEvent) error {
+	if h.reconnectionMgr == nil {
+		return e.JSON(http.StatusServiceUnavailable, map[string]string{
+			"error": "Reconnection manager not available",
+		})
+	}
+
+	states := h.reconnectionMgr.ListActiveReconnections()
+
+	return e.JSON(http.StatusOK, map[string]interface{}{
+		"reconnections": states,
+		"count":         len(states),
+	})
+}
+
+// HandleCancelReconnection cancels an active reconnection attempt
+func (h *APIHandlers) HandleCancelReconnection(e *core.RequestEvent) error {
+	if h.reconnectionMgr == nil {
+		return e.JSON(http.StatusServiceUnavailable, map[string]string{
+			"error": "Reconnection manager not available",
+		})
+	}
+
+	agentID := e.Request.PathValue("agent_id")
+	if agentID == "" {
+		return e.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Agent ID required",
+		})
+	}
+
+	if err := h.reconnectionMgr.CancelReconnection(agentID); err != nil {
+		return e.JSON(http.StatusNotFound, map[string]string{
+			"error":   "Failed to cancel reconnection",
+			"details": err.Error(),
+		})
+	}
+
+	return e.JSON(http.StatusOK, map[string]string{
+		"agent_id": agentID,
+		"status":   "cancelled",
+		"message":  "Reconnection cancelled successfully",
+	})
+}
+
+// === Session Endpoints ===
+
+// HandleListSessions returns all sessions
+func (h *APIHandlers) HandleListSessions(e *core.RequestEvent) error {
+	if h.sessionMgr == nil {
+		return e.JSON(http.StatusServiceUnavailable, map[string]string{
+			"error": "Session manager not available",
+		})
+	}
+
+	coordinatorID := e.Request.URL.Query().Get("coordinator_id")
+	status := e.Request.URL.Query().Get("status")
+
+	sessions, err := h.sessionMgr.ListSessions(e.Request.Context(), coordinatorID, session.SessionStatus(status))
+	if err != nil {
+		return e.JSON(http.StatusInternalServerError, map[string]string{
+			"error":   "Failed to list sessions",
+			"details": err.Error(),
+		})
+	}
+
+	return e.JSON(http.StatusOK, map[string]interface{}{
+		"sessions": sessions,
+		"count":    len(sessions),
+	})
+}
+
+// HandleStartSession starts a new session
+func (h *APIHandlers) HandleStartSession(e *core.RequestEvent) error {
+	if h.sessionMgr == nil {
+		return e.JSON(http.StatusServiceUnavailable, map[string]string{
+			"error": "Session manager not available",
+		})
+	}
+
+	var req struct {
+		Name        string `json:"name"`
+		Coordinator string `json:"coordinator"`
+		Description string `json:"description"`
+	}
+
+	if err := json.NewDecoder(e.Request.Body).Decode(&req); err != nil {
+		return e.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid request body",
+		})
+	}
+
+	if req.Name == "" {
+		return e.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Session name is required",
+		})
+	}
+
+	if req.Coordinator == "" {
+		req.Coordinator = "api-coordinator"
+	}
+
+	sess, err := h.sessionMgr.StartSession(e.Request.Context(), req.Name, req.Coordinator)
+	if err != nil {
+		return e.JSON(http.StatusInternalServerError, map[string]string{
+			"error":   "Failed to start session",
+			"details": err.Error(),
+		})
+	}
+
+	return e.JSON(http.StatusCreated, map[string]interface{}{
+		"session": sess,
+		"message": "Session started successfully",
+	})
+}
+
+// HandleAttachSession attaches to an existing session
+func (h *APIHandlers) HandleAttachSession(e *core.RequestEvent) error {
+	if h.sessionMgr == nil {
+		return e.JSON(http.StatusServiceUnavailable, map[string]string{
+			"error": "Session manager not available",
+		})
+	}
+
+	var req struct {
+		NameOrID string `json:"name_or_id"`
+	}
+
+	if err := json.NewDecoder(e.Request.Body).Decode(&req); err != nil {
+		return e.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid request body",
+		})
+	}
+
+	if req.NameOrID == "" {
+		return e.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Session name or ID is required",
+		})
+	}
+
+	// Try to get by ID first
+	sess, err := h.sessionMgr.GetSession(e.Request.Context(), req.NameOrID)
+	if err != nil {
+		// Try to find by name
+		sessions, listErr := h.sessionMgr.ListSessions(e.Request.Context(), "", "")
+		if listErr != nil {
+			return e.JSON(http.StatusNotFound, map[string]string{
+				"error": "Session not found",
+			})
+		}
+		for _, s := range sessions {
+			if s.Name == req.NameOrID {
+				sess = s
+				break
+			}
+		}
+		if sess == nil {
+			return e.JSON(http.StatusNotFound, map[string]string{
+				"error": "Session not found",
+			})
+		}
+	}
+
+	// Get coordinator from header or use default
+	coordinatorID := e.Request.Header.Get("X-Coordinator-ID")
+	if coordinatorID == "" {
+		coordinatorID = sess.CoordinatorID
+	}
+
+	// Attach to session
+	attachedSess, err := h.sessionMgr.AttachSession(e.Request.Context(), sess.ID, coordinatorID)
+	if err != nil {
+		return e.JSON(http.StatusInternalServerError, map[string]string{
+			"error":   "Failed to attach to session",
+			"details": err.Error(),
+		})
+	}
+
+	return e.JSON(http.StatusOK, map[string]interface{}{
+		"session": attachedSess,
+		"message": "Session attached successfully",
+	})
+}
+
+// HandleStopSession stops a running session
+func (h *APIHandlers) HandleStopSession(e *core.RequestEvent) error {
+	if h.sessionMgr == nil {
+		return e.JSON(http.StatusServiceUnavailable, map[string]string{
+			"error": "Session manager not available",
+		})
+	}
+
+	var req struct {
+		SessionID   string `json:"session_id"`
+		FinalStatus string `json:"final_status"`
+	}
+
+	if err := json.NewDecoder(e.Request.Body).Decode(&req); err != nil {
+		return e.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid request body",
+		})
+	}
+
+	if req.SessionID == "" {
+		return e.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Session ID is required",
+		})
+	}
+
+	if req.FinalStatus == "" {
+		req.FinalStatus = "completed"
+	}
+
+	err := h.sessionMgr.StopSession(e.Request.Context(), req.SessionID, session.SessionStatus(req.FinalStatus))
+	if err != nil {
+		return e.JSON(http.StatusInternalServerError, map[string]string{
+			"error":   "Failed to stop session",
+			"details": err.Error(),
+		})
+	}
+
+	return e.JSON(http.StatusOK, map[string]string{
+		"session_id": req.SessionID,
+		"status":     req.FinalStatus,
+		"message":    "Session stopped successfully",
+	})
+}
+
+// === Budget Endpoints ===
+
+// BudgetRequest represents a request to create/update a budget
+type BudgetRequest struct {
+	Name        string             `json:"name"`
+	Scope       string             `json:"scope"`
+	ScopeID     string             `json:"scope_id"`
+	LimitUSD    float64            `json:"limit_usd"`
+	ResetPeriod budget.ResetPeriod `json:"reset_period"`
+}
+
+// HandleCreateBudget creates a new budget
+func (h *APIHandlers) HandleCreateBudget(e *core.RequestEvent) error {
+	if h.budgetTracker == nil {
+		return e.JSON(http.StatusServiceUnavailable, map[string]string{
+			"error": "Budget tracker not available",
+		})
+	}
+
+	var req BudgetRequest
+	if err := json.NewDecoder(e.Request.Body).Decode(&req); err != nil {
+		return e.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid request body",
+		})
+	}
+
+	scope := budget.BudgetScope(req.Scope)
+	if !scope.IsValid() {
+		return e.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid scope (must be agent, model, or global)",
+		})
+	}
+
+	if !req.ResetPeriod.IsValid() {
+		return e.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid reset period (must be hourly, daily, weekly, or monthly)",
+		})
+	}
+
+	b, err := h.budgetTracker.CreateBudget(
+		e.Request.Context(),
+		req.Name,
+		scope,
+		req.ScopeID,
+		req.LimitUSD,
+		req.ResetPeriod,
+	)
+	if err != nil {
+		return e.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to create budget: " + err.Error(),
+		})
+	}
+
+	return e.JSON(http.StatusCreated, b)
+}
+
+// HandleListBudgets returns all budgets
+func (h *APIHandlers) HandleListBudgets(e *core.RequestEvent) error {
+	if h.budgetTracker == nil {
+		return e.JSON(http.StatusServiceUnavailable, map[string]string{
+			"error": "Budget tracker not available",
+		})
+	}
+
+	budgets, err := h.budgetTracker.ListBudgets(e.Request.Context())
+	if err != nil {
+		return e.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to list budgets: " + err.Error(),
+		})
+	}
+
+	return e.JSON(http.StatusOK, map[string]interface{}{
+		"budgets": budgets,
+		"count":   len(budgets),
+	})
+}
+
+// HandleGetBudget returns a specific budget
+func (h *APIHandlers) HandleGetBudget(e *core.RequestEvent) error {
+	if h.budgetTracker == nil {
+		return e.JSON(http.StatusServiceUnavailable, map[string]string{
+			"error": "Budget tracker not available",
+		})
+	}
+
+	id := e.Request.PathValue("id")
+	if id == "" {
+		return e.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Budget ID required",
+		})
+	}
+
+	b, err := h.budgetTracker.GetBudget(e.Request.Context(), id)
+	if err != nil {
+		return e.JSON(http.StatusNotFound, map[string]string{
+			"error": "Budget not found",
+		})
+	}
+
+	return e.JSON(http.StatusOK, b)
+}
+
+// HandleUpdateBudget updates a budget limit
+func (h *APIHandlers) HandleUpdateBudget(e *core.RequestEvent) error {
+	if h.budgetTracker == nil {
+		return e.JSON(http.StatusServiceUnavailable, map[string]string{
+			"error": "Budget tracker not available",
+		})
+	}
+
+	id := e.Request.PathValue("id")
+	if id == "" {
+		return e.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Budget ID required",
+		})
+	}
+
+	var req struct {
+		LimitUSD float64 `json:"limit_usd"`
+		Enabled  *bool   `json:"enabled,omitempty"`
+	}
+	if err := json.NewDecoder(e.Request.Body).Decode(&req); err != nil {
+		return e.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid request body",
+		})
+	}
+
+	// Update limit
+	if err := h.budgetTracker.UpdateLimit(e.Request.Context(), id, req.LimitUSD); err != nil {
+		return e.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to update budget: " + err.Error(),
+		})
+	}
+
+	// Enable/Disable if specified
+	if req.Enabled != nil {
+		if *req.Enabled {
+			h.budgetTracker.EnableBudget(e.Request.Context(), id)
+		} else {
+			h.budgetTracker.DisableBudget(e.Request.Context(), id)
+		}
+	}
+
+	b, _ := h.budgetTracker.GetBudget(e.Request.Context(), id)
+	return e.JSON(http.StatusOK, b)
+}
+
+// HandleResetBudget manually resets a budget
+func (h *APIHandlers) HandleResetBudget(e *core.RequestEvent) error {
+	if h.budgetTracker == nil {
+		return e.JSON(http.StatusServiceUnavailable, map[string]string{
+			"error": "Budget tracker not available",
+		})
+	}
+
+	id := e.Request.PathValue("id")
+	if id == "" {
+		return e.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Budget ID required",
+		})
+	}
+
+	if err := h.budgetTracker.ResetBudget(e.Request.Context(), id); err != nil {
+		return e.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to reset budget: " + err.Error(),
+		})
+	}
+
+	b, _ := h.budgetTracker.GetBudget(e.Request.Context(), id)
+	return e.JSON(http.StatusOK, b)
+}
+
+// HandleGetBudgetReport returns a detailed report
+func (h *APIHandlers) HandleGetBudgetReport(e *core.RequestEvent) error {
+	if h.budgetTracker == nil {
+		return e.JSON(http.StatusServiceUnavailable, map[string]string{
+			"error": "Budget tracker not available",
+		})
+	}
+
+	id := e.Request.PathValue("id")
+	if id == "" {
+		return e.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Budget ID required",
+		})
+	}
+
+	report, err := h.budgetTracker.GetReport(e.Request.Context(), id)
+	if err != nil {
+		return e.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to generate report: " + err.Error(),
+		})
+	}
+
+	return e.JSON(http.StatusOK, report)
 }

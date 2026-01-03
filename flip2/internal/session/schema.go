@@ -92,7 +92,7 @@ type SessionState struct {
 	ParentSessionID *string `json:"parent_session_id,omitempty" db:"parent_session_id"`
 
 	// Description provides context about the session's purpose.
-	Description string `json:"description,omitempty" db:"description"`
+	Description *string `json:"description,omitempty" db:"description"`
 
 	// Messages is the ordered list of all messages exchanged in this session.
 	Messages []Message `json:"messages" db:"-"`
@@ -765,6 +765,11 @@ func NewTaskRef(sessionID, agentID, title string) *TaskRef {
 // Uses a simple timestamp-based approach; in production, use UUID.
 func generateID() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano())
+}
+
+// stringPtr returns a pointer to the given string.
+func stringPtr(s string) *string {
+	return &s
 }
 
 // =============================================================================

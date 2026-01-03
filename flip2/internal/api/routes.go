@@ -35,4 +35,19 @@ func (h *APIHandlers) RegisterAPIRoutes(r *router.Router[*core.RequestEvent]) {
 	r.GET("/api/stats/summary", h.HandleGetCostSummary)
 	r.GET("/api/stats/costs/agent/{agent_id}", h.HandleGetCostsByAgent)
 	r.GET("/api/stats/costs/model/{model}", h.HandleGetCostsByModel)
+
+	// === Budget Endpoints ===
+	r.POST("/api/budgets", h.HandleCreateBudget)
+	r.GET("/api/budgets", h.HandleListBudgets)
+	r.GET("/api/budgets/{id}", h.HandleGetBudget)
+	r.PATCH("/api/budgets/{id}", h.HandleUpdateBudget)
+	r.POST("/api/budgets/{id}/reset", h.HandleResetBudget)
+	r.GET("/api/budgets/{id}/report", h.HandleGetBudgetReport)
+
+	// === Session Reconnection Endpoints ===
+	r.POST("/api/sessions/{id}/reconnect", h.HandleSessionReconnect)
+	r.POST("/api/sessions/{id}/reconnect-coordinator", h.HandleCoordinatorReconnect)
+	r.POST("/api/sessions/{id}/replay-messages", h.HandleReplayMessages)
+	r.GET("/api/sessions/{id}/reconnection-state", h.HandleGetReconnectionState)
+	r.POST("/api/agents/{id}/reconnect", h.HandleAgentReconnect)
 }
