@@ -23,7 +23,15 @@ type Config struct {
 		Archiver   ArchiverConfig           `yaml:"archiver"`
 		CommMonitor CommMonitorConfig       `yaml:"commmonitor"`
 		SessionCleanup SessionCleanupConfig `yaml:"session_cleanup"`
+		ZombieReaper   ZombieReaperConfig   `yaml:"zombie_reaper"`
 	} `yaml:"flip2"`
+}
+
+type ZombieReaperConfig struct {
+	Enabled          bool          `yaml:"enabled"`
+	Interval         string        `yaml:"interval"`
+	StaleThreshold   time.Duration `yaml:"stale_threshold"`
+	MaxReassignments int           `yaml:"max_reassignments"`
 }
 
 type DaemonConfig struct {
@@ -191,6 +199,22 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if config.Flip2.SessionCleanup.BatchSize == 0 {
 		config.Flip2.SessionCleanup.BatchSize = 100
+	}
+
+	// ZombieReaper defaults
+	// Default enabled if not specified (struct defaults to false, but we want it active by default for stability)
+	// checking if it was explicitly set is hard with yaml unmarshal, so we might assume
+	// we want it enabled. But strictly, boolean zero value is false.
+	// Let's assume if Interval is unset, we enable it with defaults.
+	if config.Flip2.ZombieReaper.Interval == "" {
+		config.Flip2.ZombieReaper.Enabled = true
+		config.Flip2.ZombieReaper.Interval = "0 */1 * * * *" // 1 minute
+	}
+	if config.Flip2.ZombieReaper.StaleThreshold == 0 {
+		config.Flip2.ZombieReaper.StaleThreshold = 5 * time.Minute
+	}
+	if config.Flip2.ZombieReaper.MaxReassignments == 0 {
+		config.Flip2.ZombieReaper.MaxReassignments = 3
 	}
 
 	// Validate CommMonitor configuration

@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -29,9 +30,11 @@ import (
 	"flip2/internal/executor"
 	"flip2/internal/llm"
 	"flip2/internal/logger"
+	"flip2/internal/metrics"
 	"flip2/internal/queue"
 	"flip2/internal/scheduler"
 	"flip2/internal/session"
+	"flip2/internal/spawn"
 	"flip2/internal/supervisor"
 	"flip2/internal/sync"
 	"flip2/internal/vibescore"
@@ -89,6 +92,8 @@ type Daemon struct {
 	// WebSocket components
 	wsHub     *websocket.Hub
 	wsHandler *websocket.Handler
+	// Metrics collector
+	metricsCollector *metrics.Collector
 }
 
 // New creates a new Daemon instance
@@ -232,6 +237,13 @@ func (d *Daemon) Start() error {
 	d.commMonitor = commmonitor.New(d.pb, commMonitorConfig, d.logger)
 	d.registerCommMonitor()
 
+	// Initialize Metrics Collector
+	if d.config.Flip2.Metrics.Enabled {
+		d.metricsCollector = metrics.New(d.pb, d.logger)
+		d.registerMetricsHooks()
+		d.logger.Info("Metrics collector initialized")
+	}
+
 	// Initialize Message Archiver (if enabled)
 	d.initializeArchiver()
 
@@ -331,12 +343,72 @@ func (d *Daemon) registerHooks() {
 			d.executor.QueueTask(e.Record.Id)
 		}
 
+		// P6-01: Auto-Spawn Security Reviewer on Task Complete
+		// If task is done, check if it was an implementation task and spawn reviewer
+		if status == "done" && assignee != "" {
+			// Run in background to avoid blocking the hook
+			recovery.SafelyGo(d.logger, "Check Security Review Spawn", func() {
+				// Fetch assignee agent to check role
+				agent, err := d.pb.FindRecordById("agents", assignee)
+				if err != nil {
+					d.logger.Warn("Failed to find assignee for security review check", "agent_id", assignee, "error", err)
+					return
+				}
+				
+				agentID := agent.GetString("agent_id")
+				isImplementation := strings.HasPrefix(agentID, "implementer-") || 
+				                    strings.HasPrefix(agentID, "gemini-flash-worker-") || 
+				                    strings.HasPrefix(agentID, "haiku-worker-")
+				
+				if isImplementation {
+					d.logger.Info("Implementation task completed, spawning security reviewer", "task_id", e.Record.Id)
+					d.spawnSecurityReviewer(e.Record)
+				}
+			})
+		}
+
 		// Broadcast update via WebSocket
 		if d.wsHub != nil {
 			d.wsHub.BroadcastTaskUpdate(e.Record)
 		}
 
 		return nil
+	})
+
+	// ATOMICITY: Prevent Race Conditions on Task Claiming
+	d.pb.OnRecordUpdateRequest("tasks").BindFunc(func(e *core.RecordRequestEvent) error {
+		// Only enforce checks if we are changing the assignee
+		newRecord := e.Record
+		newAssignee := newRecord.GetString("assignee")
+		
+		// If new assignee is empty, we are unassigning, which is allowed.
+		if newAssignee == "" {
+			return e.Next()
+		}
+
+		// Load the original record from DB to check current state
+		originalRecord, err := d.pb.FindRecordById("tasks", newRecord.Id)
+		if err != nil {
+			return err // Should not happen if update request found it
+		}
+		
+		originalAssignee := originalRecord.GetString("assignee")
+
+		// If previously unassigned, allow.
+		if originalAssignee == "" {
+			return e.Next()
+		}
+
+		// If previously assigned, only allow if assignee matches (re-claim/heartbeat)
+		if originalAssignee != newAssignee {
+			// REJECT: Task properly claimed by someone else
+			return &router.ApiError{
+				Status:  http.StatusConflict,
+				Message: fmt.Sprintf("Race Condition: Task already assigned to %s", originalAssignee),
+			}
+		}
+
+		return e.Next()
 	})
 
 	// Case-Insensitive Agent IDs - Normalize on Create
@@ -443,20 +515,40 @@ func (d *Daemon) registerHooks() {
 
 	// Metrics Endpoint
 	d.pb.OnServe().BindFunc(func(e *core.ServeEvent) error {
-		e.Router.GET("/api/metrics", func(e *core.RequestEvent) error { // Changed to *core.RequestEvent
+		e.Router.GET("/api/metrics", func(e *core.RequestEvent) error {
 			if !d.config.Flip2.Metrics.Enabled {
-				return e.NoContent(http.StatusForbidden) // Use e.NoContent
+				return e.NoContent(http.StatusForbidden)
 			}
 
 			stats := make(map[string]interface{})
 			stats["goroutines"] = runtime.NumGoroutine()
+			stats["timestamp"] = time.Now()
 
-			if count, err := d.pb.CountRecords("tasks"); err == nil {
-				stats["tasks_total"] = count
-			}
-
-			if count, err := d.pb.CountRecords("agents"); err == nil {
-				stats["agents_total"] = count
+			// Include metrics collector data if available
+			if d.metricsCollector != nil {
+				snapshot := d.metricsCollector.GetSnapshot(e.Request.Context())
+				stats["tasks_completed"] = snapshot.TasksCompleted
+				stats["tasks_failed"] = snapshot.TasksFailed
+				stats["signals_sent"] = snapshot.SignalsSent
+				stats["agent_heartbeats"] = snapshot.AgentHeartbeats
+				stats["llm_invocations"] = snapshot.LLMInvocations
+				stats["llm_errors"] = snapshot.LLMErrors
+				stats["reconnections"] = snapshot.Reconnections
+				stats["budget_violations"] = snapshot.BudgetViolations
+				stats["active_agents"] = snapshot.ActiveAgents
+				stats["pending_tasks"] = snapshot.PendingTasks
+				stats["in_progress_tasks"] = snapshot.InProgressTasks
+				stats["unread_signals"] = snapshot.UnreadSignals
+				stats["signals_per_minute"] = snapshot.SignalsPerMinute
+				stats["database_stats"] = snapshot.DatabaseStats
+			} else {
+				// Fallback to basic counts
+				if count, err := d.pb.CountRecords("tasks"); err == nil {
+					stats["tasks_total"] = count
+				}
+				if count, err := d.pb.CountRecords("agents"); err == nil {
+					stats["agents_total"] = count
+				}
 			}
 
 			// Add communication monitor stats
@@ -464,7 +556,7 @@ func (d *Daemon) registerHooks() {
 				stats["commmonitor"] = d.commMonitor.Stats()
 			}
 
-			return e.JSON(http.StatusOK, stats) // Use e.JSON
+			return e.JSON(http.StatusOK, stats)
 		})
 		return e.Next()
 	})
@@ -504,6 +596,68 @@ func (d *Daemon) registerHooks() {
 			}
 
 			return evt.JSON(http.StatusOK, map[string]string{"status": "signaled"})
+		})
+		return e.Next()
+	})
+
+	// Atomic Task Claim Endpoint
+	// P0 Fix #2: Prevents race conditions in task claiming
+	d.pb.OnServe().BindFunc(func(e *core.ServeEvent) error {
+		e.Router.POST("/api/tasks/{id}/claim", func(evt *core.RequestEvent) error {
+			taskID := evt.Request.PathValue("id")
+
+			var data struct {
+				AgentID string `json:"agent_id"`
+			}
+			if err := json.NewDecoder(evt.Request.Body).Decode(&data); err != nil {
+				return evt.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request body"})
+			}
+
+			if data.AgentID == "" {
+				return evt.JSON(http.StatusBadRequest, map[string]string{"error": "agent_id is required"})
+			}
+
+			// Atomic claim using database-level WHERE clause
+			// This ensures the update only succeeds if the task is still claimable
+			now := time.Now()
+			result, err := e.App.DB().NewQuery(`
+				UPDATE tasks
+				SET status = 'in_progress',
+				    assignee = {:agent},
+				    started_at = {:started}
+				WHERE id = {:id}
+				  AND status IN ('todo', 'pending')
+				  AND (assignee = '' OR assignee IS NULL OR assignee = {:agent})
+			`).Bind(map[string]interface{}{
+				"id":      taskID,
+				"agent":   data.AgentID,
+				"started": now,
+			}).Execute()
+
+			if err != nil {
+				return evt.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			}
+
+			// Check if any rows were affected
+			rowsAffected, err := result.RowsAffected()
+			if err != nil {
+				return evt.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			}
+
+			if rowsAffected == 0 {
+				// Task was already claimed by another agent or is not claimable
+				return evt.JSON(http.StatusConflict, map[string]string{
+					"status":  "not_claimed",
+					"message": "Task already claimed or not claimable",
+				})
+			}
+
+			// Successfully claimed
+			return evt.JSON(http.StatusOK, map[string]string{
+				"status":  "claimed",
+				"task_id": taskID,
+				"agent":   data.AgentID,
+			})
 		})
 		return e.Next()
 	})
@@ -702,49 +856,139 @@ func (d *Daemon) registerJobs() {
 	})
 	
 	// Zombie Task Reaper
-	// Runs every 10 minutes (Seconds Minutes Hours DOM Month DOW)
-	d.scheduler.RegisterJob("zombie-reaper", "0 */10 * * * *", func(ctx context.Context) error {
-		// Find tasks that are in_progress
-		// Using FindRecordsByFilter(collection, filter, sort, limit, offset)
-		records, err := d.pb.FindRecordsByFilter("tasks", "status = 'in_progress'", "", 100, 0)
-		if err != nil {
-			return err
-		}
-		
-		for _, rec := range records {
-			assigneeID := rec.GetString("assignee")
-			if assigneeID == "" {
-				continue
-			}
-			
-			// Check agent health
-			agent, err := d.pb.FindRecordById("agents", assigneeID)
+	// Recovers tasks from agents that have gone offline
+	if d.config.Flip2.ZombieReaper.Enabled {
+		d.scheduler.RegisterJob("zombie-reaper", d.config.Flip2.ZombieReaper.Interval, func(ctx context.Context) error {
+			// Find tasks that are in_progress
+			// Using FindRecordsByFilter(collection, filter, sort, limit, offset)
+			records, err := d.pb.FindRecordsByFilter("tasks", "status = 'in_progress'", "", 100, 0)
 			if err != nil {
-				d.logger.Error("Reaper: Failed to find agent", "agent_id", assigneeID, "error", err)
-				continue
+				d.logger.Error("Zombie reaper: Failed to query in_progress tasks", "error", err)
+				return err
 			}
-			
-			lastSeen := agent.GetDateTime("last_seen")
-			if lastSeen.IsZero() {
-				// No last_seen? Skip or assume active if recently started.
-				continue
+
+			if len(records) > 0 {
+				d.logger.Info("Zombie reaper: Starting scan", "in_progress_count", len(records))
 			}
-			
-			// If last_seen > 10 minutes ago (increased from 5 to prevent false positives)
-			if time.Since(lastSeen.Time()) > 10*time.Minute {
-				d.logger.Warn("Reaper: Detected zombie task", "task_id", rec.Id, "agent_id", assigneeID)
+
+			zombieCount := 0
+			agentNotFoundCount := 0
+			reassignedCount := 0
+			failedCount := 0
+
+			staleThreshold := d.config.Flip2.ZombieReaper.StaleThreshold
+			maxReassignments := d.config.Flip2.ZombieReaper.MaxReassignments
+
+			for _, rec := range records {
+				taskID := rec.GetString("task_id")
+				assigneeID := rec.GetString("assignee")
+				if assigneeID == "" {
+					d.logger.Debug("Reaper: Task has no assignee, skipping", "task_id", taskID)
+					continue
+				}
+
+				// Check agent health
+				agent, err := d.pb.FindRecordById("agents", assigneeID)
 				
-				// Reset task
-				rec.Set("status", "failed")
-				rec.Set("result", "Agent lost connection (Zombie Task)")
-				rec.Set("completed_at", time.Now())
-				if err := d.pb.Save(rec); err != nil {
-					d.logger.Error("Reaper: Failed to recover task", "task_id", rec.Id, "error", err)
+				// Determine if task is a zombie
+				isZombie := false
+				var zombieReason string
+
+				if err != nil {
+					// Agent not found
+					isZombie = true
+					zombieReason = fmt.Sprintf("Agent not found: %v", err)
+					agentNotFoundCount++
+				} else {
+					lastSeen := agent.GetDateTime("last_seen")
+					if lastSeen.IsZero() {
+						d.logger.Debug("Reaper: Agent has no last_seen, assuming active",
+							"task_id", taskID, "agent_id", assigneeID)
+						continue
+					}
+					
+					ageSince := time.Since(lastSeen.Time())
+					if ageSince > staleThreshold {
+						isZombie = true
+						zombieReason = fmt.Sprintf("Agent lost connection - last seen %d minutes ago", int(ageSince.Minutes()))
+					}
+				}
+
+				if isZombie {
+					zombieCount++
+					
+					// Get current retry count from metadata
+					var metaMap map[string]interface{}
+					rawMeta := rec.Get("metadata")
+					
+					// Handle different potential types for metadata
+					if m, ok := rawMeta.(map[string]interface{}); ok {
+						metaMap = m
+					} else if m, ok := rawMeta.(types.JsonMap); ok {
+						metaMap = map[string]interface{}(m)
+					} else {
+						metaMap = make(map[string]interface{})
+					}
+
+					retryCount := 0
+					if v, ok := metaMap["retry_count"]; ok {
+						// JSON numbers are often float64
+						switch n := v.(type) {
+						case float64:
+							retryCount = int(n)
+						case int:
+							retryCount = n
+						}
+					}
+
+					if retryCount < maxReassignments {
+						// Reassign
+						metaMap["retry_count"] = retryCount + 1
+						metaMap["last_reassignment"] = time.Now()
+						metaMap["reassignment_reason"] = zombieReason
+						
+						rec.Set("status", "todo")
+						rec.Set("assignee", "") // Clear assignee so it can be picked up
+						rec.Set("metadata", metaMap)
+						
+						d.logger.Warn("Reaper: Reassigning zombie task",
+							"task_id", taskID,
+							"previous_agent", assigneeID,
+							"retry_count", retryCount + 1,
+							"reason", zombieReason)
+							
+						reassignedCount++
+					} else {
+						// Max retries exceeded - Fail
+						rec.Set("status", "failed")
+						rec.Set("result", fmt.Sprintf("%s. Max retries (%d) exceeded.", zombieReason, maxReassignments))
+						rec.Set("completed_at", time.Now())
+						
+						d.logger.Error("Reaper: Task failed after max retries",
+							"task_id", taskID,
+							"retry_count", retryCount,
+							"reason", zombieReason)
+							
+						failedCount++
+					}
+
+					if err := d.pb.Save(rec); err != nil {
+						d.logger.Error("Reaper: Failed to update task", "task_id", taskID, "error", err)
+					}
 				}
 			}
-		}
-		return nil
-	})
+
+			if zombieCount > 0 {
+				d.logger.Info("Zombie reaper: Scan complete",
+					"zombies_found", zombieCount,
+					"reassigned", reassignedCount,
+					"failed", failedCount,
+					"agents_not_found", agentNotFoundCount,
+					"total_scanned", len(records))
+			}
+			return nil
+		})
+	}
 
 	// Log Pattern Cleanup - Every 8 hours
 	// Removes obviously junk/transient logs that have no value after a few hours
@@ -1523,6 +1767,19 @@ func (d *Daemon) registerCommMonitor() {
 	})
 }
 
+// registerMetricsHooks registers metrics collection hooks after PocketBase is ready
+func (d *Daemon) registerMetricsHooks() {
+	d.pb.OnServe().BindFunc(func(e *core.ServeEvent) error {
+		if d.metricsCollector != nil {
+			d.metricsCollector.RegisterHooks()
+			// Start periodic logging (every 5 minutes)
+			d.metricsCollector.StartPeriodicLogging(context.Background(), 5*time.Minute)
+			d.logger.Info("Metrics hooks registered and periodic logging started")
+		}
+		return e.Next()
+	})
+}
+
 // bootstrapCollections ensures required collections exist on startup
 func (d *Daemon) bootstrapCollections() {
 	d.pb.OnServe().BindFunc(func(e *core.ServeEvent) error {
@@ -2239,4 +2496,89 @@ func (v *vibeScoreLLMBackend) Execute(ctx context.Context, prompt string, opts i
 
 func (v *vibeScoreLLMBackend) Name() string {
 	return "claude"
+}
+
+// spawnSecurityReviewer spawns a security-reviewer agent and assigns it to review the completed task
+func (d *Daemon) spawnSecurityReviewer(completedTask *core.Record) {
+	// 1. Get the role template
+	roleName := "security-reviewer"
+	role := spawn.GetBuiltinRole(roleName)
+	if role == nil {
+		d.logger.Error("Security reviewer role not found")
+		return
+	}
+
+	// 2. Generate Agent ID
+	// We use the helper from spawn package if available, or just replicate it.
+	// Since spawn.GenerateAgentID is private (lower case 'g'), we'll implement a simple one here or rely on the fact that
+	// SpawnWithRole returns an ID. But SpawnWithRole assumes a specific flow.
+	// We'll generate a simple ID.
+	randBytes := make([]byte, 4)
+	rand.Read(randBytes)
+	agentID := fmt.Sprintf("%s-%x", roleName, randBytes)
+
+	// 3. Create Agent Record
+	agentsCollection, err := d.pb.FindCollectionByNameOrId("agents")
+	if err != nil {
+		d.logger.Error("Failed to find agents collection", "error", err)
+		return
+	}
+
+	agent := core.NewRecord(agentsCollection)
+	agent.Set("agent_id", agentID)
+	// Map role model to backend
+	backend := "gemini" // Default
+	if strings.Contains(strings.ToLower(role.Model), "claude") {
+		backend = "claude"
+	}
+	agent.Set("backend", backend)
+	agent.Set("status", "idle")
+	agent.Set("mode", "local") // Run locally via executor
+	agent.Set("metadata", map[string]interface{}{
+		"role":          roleName,
+		"system_prompt": role.SystemPrompt,
+		"spawned_for":   completedTask.Id,
+	})
+
+	if err := d.pb.Save(agent); err != nil {
+		d.logger.Error("Failed to create security reviewer agent", "error", err)
+		return
+	}
+	d.logger.Info("Created security reviewer agent", "agent_id", agentID)
+
+	// 4. Create Review Task
+	tasksCollection, err := d.pb.FindCollectionByNameOrId("tasks")
+	if err != nil {
+		d.logger.Error("Failed to find tasks collection", "error", err)
+		return
+	}
+
+	// Construct task description
+	var descBuilder strings.Builder
+	descBuilder.WriteString("Review the implementation of the following task for security vulnerabilities.\n\n")
+	descBuilder.WriteString("ORIGINAL TASK TITLE: " + completedTask.GetString("title") + "\n")
+	descBuilder.WriteString("ORIGINAL TASK DESCRIPTION:\n" + completedTask.GetString("description") + "\n\n")
+	descBuilder.WriteString("IMPLEMENTATION OUTPUT:\n" + completedTask.GetString("stdout_log") + "\n")
+	
+	// Add result if it contains info
+	result := completedTask.GetString("result")
+	if result != "" && result != "Task completed successfully." {
+		descBuilder.WriteString("\nRESULT MESSAGE:\n" + result + "\n")
+	}
+
+	task := core.NewRecord(tasksCollection)
+	task.Set("task_id", fmt.Sprintf("audit-%s", completedTask.GetString("task_id"))) // Link ID
+	task.Set("title", "Security Review: "+completedTask.GetString("title"))
+	task.Set("description", descBuilder.String())
+	task.Set("status", "todo")
+	task.Set("priority", 4) // High priority
+	task.Set("assignee", agent.Id) // Assign to the new agent (Record ID)
+	task.Set("depends_on", []string{completedTask.Id}) // Dependency
+
+	if err := d.pb.Save(task); err != nil {
+		d.logger.Error("Failed to create security review task", "error", err)
+		return
+	}
+
+	d.logger.Info("Queued security review task", "task_id", task.GetString("task_id"), "assignee", agentID)
 }
