@@ -77,8 +77,19 @@ func (ce *CapCutExporter) Export(ctx context.Context, options ExportOptions) (*E
 		return nil, fmt.Errorf("failed to load template: %w", err)
 	}
 
-	// Convert to CapCut project
-	project, err := ToCapCutProject(template, options.Variables)
+	// Merge template variables with provided variables (provided variables take precedence)
+	mergedVariables := make(map[string]interface{})
+	// Start with template defaults
+	for k, v := range template.Variables {
+		mergedVariables[k] = v
+	}
+	// Override with provided variables
+	for k, v := range options.Variables {
+		mergedVariables[k] = v
+	}
+
+	// Convert to CapCut project with merged variables
+	project, err := ToCapCutProject(template, mergedVariables)
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert to CapCut project: %w", err)
 	}
