@@ -64,100 +64,235 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 <html>
 <head>
     <title>Video Editor Demo - FLIP2</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="/demo.css">
 </head>
 <body>
+    <div class="bg-animation"></div>
     <div class="container">
         <header>
-            <h1>🎬 Video Editor Demo</h1>
-            <p class="subtitle">Template-Based Video Generation with CapCut Integration</p>
+            <div class="logo">
+                <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+                    <rect x="4" y="4" width="40" height="40" rx="8" fill="url(#grad1)"/>
+                    <path d="M16 18 L24 24 L16 30 Z" fill="white"/>
+                    <path d="M26 18 L34 24 L26 30 Z" fill="white" opacity="0.7"/>
+                    <defs>
+                        <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%">
+                            <stop offset="0%" stop-color="#667eea"/>
+                            <stop offset="100%" stop-color="#764ba2"/>
+                        </linearGradient>
+                    </defs>
+                </svg>
+            </div>
+            <h1>FLIP2 Video Editor</h1>
+            <p class="subtitle">Professional Template-Based Video Generation</p>
+            <p class="tagline">Powered by FFmpeg • CapCut Integration • Production Ready</p>
         </header>
 
-        <div class="capabilities">
-            <h2>System Capabilities</h2>
+        <div class="section">
+            <div class="section-header">
+                <h2>Core Capabilities</h2>
+                <p class="section-desc">Enterprise-grade video composition system with template inheritance and batch processing</p>
+            </div>
             <div class="grid">
                 <div class="capability-card">
-                    <div class="icon">📐</div>
+                    <div class="card-glow"></div>
+                    <div class="icon-wrapper">
+                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+                            <path d="M2 17l10 5 10-5"/>
+                            <path d="M2 12l10 5 10-5"/>
+                        </svg>
+                    </div>
                     <h3>Template Engine</h3>
-                    <p>Create reusable video templates with variables, effects, and inheritance</p>
-                    <ul>
-                        <li>YAML/JSON template format</li>
-                        <li>Multi-level inheritance</li>
-                        <li>Variable substitution</li>
-                        <li>Canvas configuration</li>
-                    </ul>
+                    <p class="card-description">Reusable video templates with multi-level inheritance and dynamic variables</p>
+                    <div class="feature-list">
+                        <div class="feature-item">
+                            <span class="check">✓</span>
+                            <span>YAML/JSON format support</span>
+                        </div>
+                        <div class="feature-item">
+                            <span class="check">✓</span>
+                            <span>Multi-level inheritance</span>
+                        </div>
+                        <div class="feature-item">
+                            <span class="check">✓</span>
+                            <span>Type-safe variable substitution</span>
+                        </div>
+                        <div class="feature-item">
+                            <span class="check">✓</span>
+                            <span>Canvas configuration</span>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="capability-card">
-                    <div class="icon">🎨</div>
+                    <div class="card-glow"></div>
+                    <div class="icon-wrapper">
+                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="3"/>
+                            <path d="M12 1v6m0 6v6M6.7 6.7l4.2 4.2m2.2 2.2l4.2 4.2M1 12h6m6 0h6M6.7 17.3l4.2-4.2m2.2-2.2l4.2-4.2"/>
+                        </svg>
+                    </div>
                     <h3>Visual Effects</h3>
-                    <p>5 built-in effects with customizable parameters</p>
-                    <ul>
-                        <li>Color Correction (brightness, contrast, saturation)</li>
-                        <li>Blur (gaussian, box, motion)</li>
-                        <li>Sharpen (unsharp mask)</li>
-                        <li>Noise (film grain)</li>
-                        <li>Vignette (darkened edges)</li>
-                    </ul>
+                    <p class="card-description">Professional-grade FFmpeg-based effects with real-time parameter tuning</p>
+                    <div class="feature-list">
+                        <div class="feature-item">
+                            <span class="check">✓</span>
+                            <span>Color correction suite</span>
+                        </div>
+                        <div class="feature-item">
+                            <span class="check">✓</span>
+                            <span>Motion blur & gaussian</span>
+                        </div>
+                        <div class="feature-item">
+                            <span class="check">✓</span>
+                            <span>Unsharp mask sharpening</span>
+                        </div>
+                        <div class="feature-item">
+                            <span class="check">✓</span>
+                            <span>Film grain & vignette</span>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="capability-card">
-                    <div class="icon">📹</div>
+                    <div class="card-glow"></div>
+                    <div class="icon-wrapper">
+                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="3" width="18" height="18" rx="2"/>
+                            <circle cx="8.5" cy="8.5" r="1.5"/>
+                            <path d="M21 15l-5-5L5 21"/>
+                        </svg>
+                    </div>
                     <h3>CapCut Integration</h3>
-                    <p>Export templates to CapCut desktop editor format</p>
-                    <ul>
-                        <li>draft.content JSON generation</li>
-                        <li>Timeline & tracks</li>
-                        <li>Text overlays</li>
-                        <li>Transitions & animations</li>
-                    </ul>
+                    <p class="card-description">Seamless export to CapCut desktop editor with full project fidelity</p>
+                    <div class="feature-list">
+                        <div class="feature-item">
+                            <span class="check">✓</span>
+                            <span>draft.content JSON format</span>
+                        </div>
+                        <div class="feature-item">
+                            <span class="check">✓</span>
+                            <span>Multi-track timeline</span>
+                        </div>
+                        <div class="feature-item">
+                            <span class="check">✓</span>
+                            <span>Text & graphic overlays</span>
+                        </div>
+                        <div class="feature-item">
+                            <span class="check">✓</span>
+                            <span>Transitions & keyframes</span>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="capability-card">
-                    <div class="icon">⚡</div>
+                    <div class="card-glow"></div>
+                    <div class="icon-wrapper">
+                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+                        </svg>
+                    </div>
                     <h3>Batch Processing</h3>
-                    <p>Process multiple videos concurrently with progress tracking</p>
-                    <ul>
-                        <li>Worker pool (configurable concurrency)</li>
-                        <li>Priority queue</li>
-                        <li>CSV/JSON data sources</li>
-                        <li>Thread-safe progress tracking</li>
-                    </ul>
+                    <p class="card-description">Concurrent video generation with intelligent worker pools and progress tracking</p>
+                    <div class="feature-list">
+                        <div class="feature-item">
+                            <span class="check">✓</span>
+                            <span>Configurable worker pools</span>
+                        </div>
+                        <div class="feature-item">
+                            <span class="check">✓</span>
+                            <span>Priority queue system</span>
+                        </div>
+                        <div class="feature-item">
+                            <span class="check">✓</span>
+                            <span>CSV/JSON data sources</span>
+                        </div>
+                        <div class="feature-item">
+                            <span class="check">✓</span>
+                            <span>Thread-safe progress tracking</span>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="capability-card">
-                    <div class="icon">🔒</div>
+                    <div class="card-glow"></div>
+                    <div class="icon-wrapper">
+                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="5" y="11" width="14" height="10" rx="2"/>
+                            <circle cx="12" cy="16" r="2"/>
+                            <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                        </svg>
+                    </div>
                     <h3>Security</h3>
-                    <p>Built-in security features for safe processing</p>
-                    <ul>
-                        <li>Path traversal prevention</li>
-                        <li>Cryptographic ID generation</li>
-                        <li>Input validation</li>
-                        <li>Safe file extensions</li>
-                    </ul>
+                    <p class="card-description">Enterprise-grade security with cryptographic primitives and input validation</p>
+                    <div class="feature-list">
+                        <div class="feature-item">
+                            <span class="check">✓</span>
+                            <span>Path traversal protection</span>
+                        </div>
+                        <div class="feature-item">
+                            <span class="check">✓</span>
+                            <span>Crypto/rand ID generation</span>
+                        </div>
+                        <div class="feature-item">
+                            <span class="check">✓</span>
+                            <span>Input sanitization</span>
+                        </div>
+                        <div class="feature-item">
+                            <span class="check">✓</span>
+                            <span>Safe file extension whitelist</span>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="capability-card">
-                    <div class="icon">🧪</div>
+                    <div class="card-glow"></div>
+                    <div class="icon-wrapper">
+                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+                            <path d="M22 4L12 14.01l-3-3"/>
+                        </svg>
+                    </div>
                     <h3>Testing & Validation</h3>
-                    <p>Comprehensive test suite with 71 tests</p>
-                    <ul>
-                        <li>Unit tests (65 tests)</li>
-                        <li>Integration tests (6 tests)</li>
-                        <li>Thread safety verification</li>
-                        <li>100% pass rate</li>
-                    </ul>
+                    <p class="card-description">Production-ready with comprehensive test coverage and validation suite</p>
+                    <div class="feature-list">
+                        <div class="feature-item">
+                            <span class="check">✓</span>
+                            <span>71/71 tests passing (100%)</span>
+                        </div>
+                        <div class="feature-item">
+                            <span class="check">✓</span>
+                            <span>Integration test coverage</span>
+                        </div>
+                        <div class="feature-item">
+                            <span class="check">✓</span>
+                            <span>Thread safety verification</span>
+                        </div>
+                        <div class="feature-item">
+                            <span class="check">✓</span>
+                            <span>Security validation suite</span>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
 
         <div class="section">
-            <h2>Available Templates</h2>
-            <div id="templates-list">Loading...</div>
+            <div class="section-header">
+                <h2>Available Templates</h2>
+                <p class="section-desc">Pre-configured templates ready for customization</p>
+            </div>
+            <div id="templates-list" class="loading">Loading templates...</div>
         </div>
 
         <div class="section">
-            <h2>Try It Out</h2>
+            <div class="section-header">
+                <h2>Interactive Demo</h2>
+                <p class="section-desc">Try out the system with live examples</p>
+            </div>
             <div class="demo-panel">
                 <h3>1. Quick Export</h3>
                 <form id="export-form">
@@ -422,127 +557,392 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 
 func handleCSS(w http.ResponseWriter, r *http.Request) {
 	css := `
+/* Reset & Base */
 * { margin: 0; padding: 0; box-sizing: border-box; }
+
 body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: #333;
-    padding: 20px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: #0f0f23;
+    color: #e0e0e0;
+    padding: 0;
+    min-height: 100vh;
+    position: relative;
+    overflow-x: hidden;
 }
-.container { max-width: 1200px; margin: 0 auto; }
+
+/* Animated Background */
+.bg-animation {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background:
+        radial-gradient(circle at 20% 50%, rgba(102, 126, 234, 0.15) 0%, transparent 50%),
+        radial-gradient(circle at 80% 80%, rgba(118, 75, 162, 0.15) 0%, transparent 50%),
+        radial-gradient(circle at 40% 90%, rgba(96, 108, 229, 0.1) 0%, transparent 50%);
+    z-index: 0;
+    animation: bgPulse 20s ease-in-out infinite;
+}
+
+@keyframes bgPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+}
+
+.container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 20px;
+    position: relative;
+    z-index: 1;
+}
+
+/* Header */
 header {
     text-align: center;
-    color: white;
-    padding: 40px 20px;
-    margin-bottom: 30px;
+    padding: 60px 20px 40px;
+    margin-bottom: 40px;
 }
-header h1 { font-size: 3em; margin-bottom: 10px; }
-.subtitle { font-size: 1.2em; opacity: 0.9; }
-.section {
-    background: white;
-    border-radius: 12px;
-    padding: 30px;
+
+.logo {
+    display: inline-block;
     margin-bottom: 20px;
-    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    animation: float 3s ease-in-out infinite;
 }
-h2 { color: #667eea; margin-bottom: 20px; }
+
+@keyframes float {
+    0%, 100% { transform: translateY(0px); }
+    50% { transform: translateY(-10px); }
+}
+
+header h1 {
+    font-size: 3.5em;
+    margin-bottom: 12px;
+    background: linear-gradient(135deg, #667eea 0%, #b490ff 50%, #764ba2 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    font-weight: 800;
+    letter-spacing: -1px;
+}
+
+.subtitle {
+    font-size: 1.4em;
+    color: rgba(255, 255, 255, 0.9);
+    margin-bottom: 8px;
+    font-weight: 500;
+}
+
+.tagline {
+    font-size: 0.95em;
+    color: rgba(255, 255, 255, 0.6);
+    letter-spacing: 0.5px;
+}
+
+/* Section */
+.section {
+    background: rgba(255, 255, 255, 0.03);
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 24px;
+    padding: 40px;
+    margin-bottom: 30px;
+    box-shadow:
+        0 8px 32px rgba(0, 0, 0, 0.3),
+        inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.section-header {
+    margin-bottom: 32px;
+}
+
+.section-header h2 {
+    color: #ffffff;
+    font-size: 2em;
+    margin-bottom: 8px;
+    font-weight: 700;
+}
+
+.section-desc {
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 1.05em;
+}
+
+/* Grid */
 .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-    gap: 20px;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 24px;
 }
+
+/* Capability Cards */
 .capability-card {
-    border: 2px solid #e0e0e0;
-    border-radius: 8px;
-    padding: 20px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+    padding: 32px 28px;
+    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    overflow: hidden;
+}
+
+.card-glow {
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    background: radial-gradient(circle, rgba(102, 126, 234, 0.15) 0%, transparent 70%);
+    opacity: 0;
+    transition: opacity 0.4s;
+}
+
+.capability-card:hover {
+    border-color: rgba(102, 126, 234, 0.5);
+    transform: translateY(-8px) scale(1.02);
+    box-shadow:
+        0 20px 40px rgba(102, 126, 234, 0.2),
+        0 0 80px rgba(102, 126, 234, 0.1);
+}
+
+.capability-card:hover .card-glow {
+    opacity: 1;
+}
+
+.icon-wrapper {
+    width: 64px;
+    height: 64px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: linear-gradient(135deg, rgba(102, 126, 234, 0.2) 0%, rgba(118, 75, 162, 0.2) 100%);
+    border-radius: 16px;
+    margin-bottom: 20px;
+    color: #b490ff;
     transition: all 0.3s;
 }
-.capability-card:hover {
-    border-color: #667eea;
-    transform: translateY(-5px);
-    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.2);
+
+.capability-card:hover .icon-wrapper {
+    transform: scale(1.1) rotate(5deg);
+    background: linear-gradient(135deg, rgba(102, 126, 234, 0.3) 0%, rgba(118, 75, 162, 0.3) 100%);
 }
-.icon { font-size: 3em; margin-bottom: 10px; }
-.capability-card h3 { color: #333; margin: 10px 0; }
-.capability-card p { color: #666; margin-bottom: 15px; }
-.capability-card ul { list-style: none; padding-left: 0; }
-.capability-card li {
-    padding: 5px 0;
-    color: #555;
-    border-bottom: 1px solid #f0f0f0;
+
+.capability-card h3 {
+    color: #ffffff;
+    margin: 16px 0 12px;
+    font-size: 1.4em;
+    font-weight: 700;
 }
-.capability-card li:before { content: "✓ "; color: #667eea; font-weight: bold; }
+
+.card-description {
+    color: rgba(255, 255, 255, 0.65);
+    margin-bottom: 20px;
+    line-height: 1.6;
+    font-size: 0.95em;
+}
+
+.feature-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.feature-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 0;
+    color: rgba(255, 255, 255, 0.7);
+    font-size: 0.92em;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.feature-item:last-child {
+    border-bottom: none;
+}
+
+.check {
+    color: #667eea;
+    font-weight: bold;
+    font-size: 1.1em;
+}
+
+/* Demo Panel & Forms */
 .demo-panel {
-    background: #f8f9fa;
-    padding: 20px;
-    border-radius: 8px;
-    margin-bottom: 15px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 28px;
+    border-radius: 16px;
+    margin-bottom: 24px;
 }
-form { display: flex; flex-direction: column; gap: 10px; }
-label { font-weight: bold; color: #555; }
+
+.demo-panel h3 {
+    color: #ffffff;
+    font-size: 1.3em;
+    margin-bottom: 20px;
+    font-weight: 600;
+}
+
+form {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+label {
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.9);
+    margin-bottom: 6px;
+    font-size: 0.95em;
+}
+
 input, select {
-    padding: 10px;
-    border: 2px solid #e0e0e0;
-    border-radius: 4px;
+    padding: 14px 16px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 10px;
     font-size: 1em;
+    background: rgba(255, 255, 255, 0.06);
+    color: #ffffff;
+    transition: all 0.3s;
 }
+
+input:focus, select:focus {
+    outline: none;
+    border-color: #667eea;
+    background: rgba(255, 255, 255, 0.08);
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
 button {
-    background: #667eea;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     color: white;
     border: none;
-    padding: 12px 24px;
-    border-radius: 4px;
+    padding: 14px 28px;
+    border-radius: 10px;
     cursor: pointer;
     font-size: 1em;
-    font-weight: bold;
-    transition: background 0.3s;
+    font-weight: 600;
+    transition: all 0.3s;
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
 }
-button:hover { background: #5568d3; }
+
+button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+}
+
+button:active {
+    transform: translateY(0);
+}
+
+/* Status Messages */
 .success {
-    background: #d4edda;
-    color: #155724;
-    padding: 15px;
-    border-radius: 4px;
-    margin-top: 10px;
+    background: rgba(16, 185, 129, 0.15);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    color: #10b981;
+    padding: 16px;
+    border-radius: 10px;
+    margin-top: 16px;
+    font-weight: 500;
 }
+
 .error {
-    background: #f8d7da;
-    color: #721c24;
-    padding: 15px;
-    border-radius: 4px;
-    margin-top: 10px;
+    background: rgba(239, 68, 68, 0.15);
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    color: #ef4444;
+    padding: 16px;
+    border-radius: 10px;
+    margin-top: 16px;
+    font-weight: 500;
 }
+
 .info {
-    background: #d1ecf1;
-    color: #0c5460;
-    padding: 15px;
-    border-radius: 4px;
-    margin-top: 10px;
+    background: rgba(59, 130, 246, 0.15);
+    border: 1px solid rgba(59, 130, 246, 0.3);
+    color: #3b82f6;
+    padding: 16px;
+    border-radius: 10px;
+    margin-top: 16px;
+    font-weight: 500;
 }
-.template-grid, .tech-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-    gap: 15px;
-}
-.template-card, .tech-card {
-    background: white;
-    border: 2px solid #e0e0e0;
-    padding: 15px;
-    border-radius: 8px;
+
+/* Template Display */
+.loading {
+    color: rgba(255, 255, 255, 0.5);
     text-align: center;
+    padding: 40px;
+    font-style: italic;
 }
-.effects-list { display: flex; flex-direction: column; gap: 10px; margin-top: 15px; }
-.effect-card {
-    background: white;
-    border-left: 4px solid #667eea;
-    padding: 15px;
-    border-radius: 4px;
+
+.template-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 16px;
 }
-code {
-    background: #f4f4f4;
-    padding: 2px 6px;
-    border-radius: 3px;
+
+.template-card {
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 20px;
+    border-radius: 12px;
+    text-align: center;
+    transition: all 0.3s;
+}
+
+.template-card:hover {
+    border-color: rgba(102, 126, 234, 0.4);
+    transform: translateY(-4px);
+}
+
+.template-card h4 {
+    color: #ffffff;
+    margin-bottom: 12px;
+    font-size: 1.1em;
+}
+
+.template-card button {
+    width: 100%;
+    padding: 10px;
     font-size: 0.9em;
+}
+
+/* Effects */
+.effects-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 16px;
+}
+
+.effect-card {
+    background: rgba(255, 255, 255, 0.04);
+    border-left: 4px solid #667eea;
+    padding: 16px;
+    border-radius: 8px;
+    color: rgba(255, 255, 255, 0.8);
+}
+
+.effect-card h4 {
+    color: #ffffff;
+    margin-bottom: 8px;
+}
+
+code {
+    background: rgba(255, 255, 255, 0.1);
+    padding: 3px 8px;
+    border-radius: 5px;
+    font-size: 0.9em;
+    color: #b490ff;
+    font-family: 'Monaco', 'Menlo', monospace;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    header h1 { font-size: 2.5em; }
+    .grid { grid-template-columns: 1fr; }
+    .section { padding: 24px; }
+    .template-grid { grid-template-columns: 1fr; }
 }
 `
 	w.Header().Set("Content-Type", "text/css")
