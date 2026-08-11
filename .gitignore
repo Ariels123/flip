@@ -59,3 +59,14 @@ node_modules/
 !scripts/*.sh
 !scripts/*.py
 !config/*.yaml
+
+# Compiled binaries and packaged builds. These were committed under a new name
+# on each build (flip2_test, flip2d_test, flip2d-win.exe, flip2-windows.zip...),
+# which put 263 MB of superseded executables into history permanently.
+flip2/flip2_test
+flip2/flip2d_test
+flip2/flip2d_fixed
+flip2/*.exe
+flip2/deploy/*.zip
+*.exe
+*.zip
